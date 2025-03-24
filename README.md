@@ -1,6 +1,6 @@
-# TableXtend
+# Tablextend
 
-TableXtend is a powerful tool that allows you to enhance spreadsheet data with AI-generated content. Upload your CSV or Excel file, define AI prompts to analyze your data, and generate new columns with valuable insights.
+Tablextend is a powerful tool that allows you to enhance spreadsheet data with AI-generated content. Upload your CSV or Excel file, define AI prompts to analyze your data, and generate new columns with valuable insights.
 
 ## Features
 

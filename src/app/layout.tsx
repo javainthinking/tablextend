@@ -8,7 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "TableXtend - AI-Powered Data Extension for Spreadsheets",
+  title: "Tablextend - AI-Powered Data Extension for Spreadsheets",
   description: "Upload your Excel or CSV files and use AI to automatically extend your data with intelligent insights.",
   keywords: ["AI", "Excel", "CSV", "data analysis", "spreadsheet", "automation", "data extension"],
 };
