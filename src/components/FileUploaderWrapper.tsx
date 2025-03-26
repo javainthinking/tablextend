@@ -8,4 +8,4 @@ const FileUploader = dynamic(() => import('./FileUploader'), {
 
 export default function FileUploaderWrapper() {
   return <FileUploader />;
-} 
+}

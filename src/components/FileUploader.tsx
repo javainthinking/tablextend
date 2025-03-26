@@ -53,17 +53,17 @@ export default function FileUploader() {
   const [error, setError] = useState<ReactNode | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
-  
+
   // Add column width state management
   const [columnWidths, setColumnWidths] = useState<Record<number, number>>({});
   const [isResizing, setIsResizing] = useState(false);
   const [currentResizingColumn, setCurrentResizingColumn] = useState<number | null>(null);
   const [startX, setStartX] = useState(0);
   const [startWidth, setStartWidth] = useState(0);
-  
+
   // Add highlighted row functionality
   const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
-  
+
   // Add progress tracking state
   const [generationProgress, setGenerationProgress] = useState<{
     currentColumn: string;
@@ -78,49 +78,107 @@ export default function FileUploader() {
     totalRows: 0,
     percentage: 0,
     waitingTime: 0,
-    modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
+    modelInfo: 'Anthropic Claude'
   });
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
 
   // Add delay utility function to ensure API call intervals
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-  
+
   // Track API call frequency to avoid exceeding API limits
   const [lastApiCallTime, setLastApiCallTime] = useState<number>(0);
-  
+
   // Monitor and control API call rate
   const rateControlledApiCall = async <T,>(apiCallFn: () => Promise<T>): Promise<T> => {
     // Check time since last API call
     const now = Date.now();
     const timeSinceLastCall = now - lastApiCallTime;
     const minTimeBetweenCalls = 500; // Minimum interval 500ms
-    
+
     // If needed, add delay to ensure API call spacing
     if (timeSinceLastCall < minTimeBetweenCalls) {
       await delay(minTimeBetweenCalls - timeSinceLastCall);
     }
-    
+
     // Update last call time and execute API call
     setLastApiCallTime(Date.now());
     return apiCallFn();
+  };
+
+  // Enhanced API call with retry mechanism for handling timeouts
+  const rateControlledApiCallWithRetry = async <T,>(
+    apiCallFn: () => Promise<T>,
+    maxRetries: number = 3
+  ): Promise<T> => {
+    let retryCount = 0;
+    let lastError: unknown = null;
+
+    // Try the API call with retries
+    while (retryCount <= maxRetries) {
+      try {
+        // If this is a retry, add a progressively longer delay
+        if (retryCount > 0) {
+          const retryDelay = 1000 * retryCount; // Increase delay with each retry
+          toast.custom(
+            <div className="bg-blue-600 px-4 py-3 text-white rounded-md">
+              Retrying API call ({retryCount}/{maxRetries}) after timeout... Please wait.
+            </div>
+          );
+          console.log(`Retry ${retryCount}/${maxRetries} after delay of ${retryDelay}ms`);
+          await delay(retryDelay);
+        }
+
+        // Make the rate-controlled API call
+        const result = await rateControlledApiCall(apiCallFn);
+        return result;
+      } catch (error: unknown) {
+        lastError = error;
+
+        // Check if error is a timeout or other retriable error
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const isTimeout =
+          errorMessage.includes('timeout') ||
+          errorMessage.includes('504') ||
+          errorMessage.includes('Gateway') ||
+          errorMessage.includes('Failed to fetch');
+
+        // If it's a timeout and we haven't exceeded max retries, continue to retry
+        if (isTimeout && retryCount < maxRetries) {
+          console.log(`API timeout detected. Will retry (${retryCount + 1}/${maxRetries})`);
+          retryCount++;
+          // Update UI to show retry status
+          setGenerationProgress(prev => ({
+            ...prev,
+            modelInfo: `Retry ${retryCount}/${maxRetries} after Gateway Timeout...`
+          }));
+          continue;
+        }
+
+        // If it's not a timeout or we've exceeded retries, rethrow
+        throw error;
+      }
+    }
+
+    // This should not be reached but is here for safety
+    throw lastError;
   };
 
   // Optimized helper function: intelligently truncate text for reasonable display
   const intelligentTruncate = (text: string, maxLength = 20) => {
     if (!text) return '';
     const str = String(text);
-    
+
     // If text length is less than max length, return directly
     if (str.length <= maxLength) return str;
-    
+
     // For longer numbers, display in full
     if (!isNaN(Number(str)) && str.length < 30) return str;
-    
+
     // For shorter text, show more content
     if (str.length < 30) return str;
-    
+
     // For medium-length text, truncate appropriately
     return `${str.substring(0, maxLength)}...`;
   };
@@ -129,7 +187,7 @@ export default function FileUploader() {
   const handleDrag = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     if (e.type === "dragenter" || e.type === "dragover") {
       setDragActive(true);
     } else if (e.type === "dragleave") {
@@ -141,7 +199,7 @@ export default function FileUploader() {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       processFile(file);
@@ -186,14 +244,14 @@ export default function FileUploader() {
         if (results.data && results.data.length > 0) {
           const headers = results.data[0] as string[];
           const data = results.data.slice(1) as (string | number | boolean | null)[][];
-          
+
           setFileData({
             id: uuidv4(),
             fileName: file.name,
             headers,
             data,
           });
-          
+
           setSuccess('CSV file uploaded successfully!');
         } else {
           setError('The CSV file is empty or invalid.');
@@ -209,23 +267,23 @@ export default function FileUploader() {
 
   const handleExcelFile = (file: File) => {
     const reader = new FileReader();
-    
+
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        
+
         const sheets = workbook.SheetNames;
-        
+
         if (sheets.length === 1) {
           // If there's only one sheet, use it directly
           const worksheet = workbook.Sheets[sheets[0]];
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-          
+
           if (jsonData.length > 0) {
             const headers = jsonData[0] as string[];
             const rows = jsonData.slice(1) as (string | number | boolean | null)[][];
-            
+
             setFileData({
               id: uuidv4(),
               fileName: file.name,
@@ -234,7 +292,7 @@ export default function FileUploader() {
               sheets,
               selectedSheet: sheets[0],
             });
-            
+
             setSuccess('Excel file uploaded successfully!');
           } else {
             setError('The Excel file is empty or invalid.');
@@ -253,41 +311,41 @@ export default function FileUploader() {
         setError(`Error parsing Excel file: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
-    
+
     reader.onerror = () => {
       setError('Error reading the file. Please try again.');
     };
-    
+
     reader.readAsArrayBuffer(file);
   };
 
   const handleSheetSelect = (sheetName: string) => {
     if (!fileData || !fileData.sheets) return;
-    
+
     try {
       const file = fileInputRef.current?.files?.[0];
       if (!file) return;
-      
+
       const reader = new FileReader();
-      
+
       reader.onload = (e) => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: 'array' });
           const worksheet = workbook.Sheets[sheetName];
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-          
+
           if (jsonData.length > 0) {
             const headers = jsonData[0] as string[];
             const rows = jsonData.slice(1) as (string | number | boolean | null)[][];
-            
+
             setFileData({
               ...fileData,
               headers,
               data: rows,
               selectedSheet: sheetName,
             });
-            
+
             setSuccess(`Sheet "${sheetName}" selected successfully!`);
           } else {
             setError(`Selected sheet "${sheetName}" is empty or invalid.`);
@@ -296,7 +354,7 @@ export default function FileUploader() {
           setError(`Error parsing sheet "${sheetName}": ${error instanceof Error ? error.message : String(error)}`);
         }
       };
-      
+
       reader.readAsArrayBuffer(file);
     } catch (error) {
       setError(`Error selecting sheet: ${error instanceof Error ? error.message : String(error)}`);
@@ -309,17 +367,17 @@ export default function FileUploader() {
       setError('Please upload a file first.');
       return;
     }
-    
+
     // Determine which columns to process
-    const columnsToProcess = columnId 
-      ? newColumns.filter(col => col.id === columnId) 
+    const columnsToProcess = columnId
+      ? newColumns.filter(col => col.id === columnId)
       : newColumns.filter(col => col.name && col.prompt);
-    
+
     if (columnsToProcess.length === 0) {
       setError('Please provide column name and prompt before generating preview.');
       return;
     }
-    
+
     // Update all columns to be processed
     const updatedColumns = [...newColumns];
     columnsToProcess.forEach(column => {
@@ -330,7 +388,7 @@ export default function FileUploader() {
     });
     setNewColumns(updatedColumns);
     setError(null);
-    
+
     try {
       // Get first 5 rows of data for preview generation
       const previewRowData = fileData.data.slice(0, 5).map((row) => {
@@ -341,13 +399,13 @@ export default function FileUploader() {
         });
         return rowObj;
       });
-      
+
       // Generate preview for each column - batch process all preview rows for each column at once
       const previewResults = await Promise.all(
         columnsToProcess.map(async (column) => {
           try {
-            // [Optimization] Batch process all preview rows, send request once
-            const response = await rateControlledApiCall<ApiResponse>(async () => {
+            // [Optimization] Batch process all preview rows, send request once with retry capability
+            const response = await rateControlledApiCallWithRetry<ApiResponse>(async () => {
               const result = await fetch('/api/generate', {
                 method: 'POST',
                 headers: {
@@ -361,36 +419,58 @@ export default function FileUploader() {
                   isBatch: true // Flag as batch request
                 }),
               });
+
+              if (!result.ok) {
+                if (result.status === 504) {
+                  throw new Error('Gateway Timeout (504): Server took too long to respond');
+                }
+                throw new Error(`API error: ${result.status} ${result.statusText}`);
+              }
+
               return await result.json();
             });
-            
+
             // Update model info display
             if (response.model) {
               setGenerationProgress(prev => ({
                 ...prev,
-                modelInfo: `Using Anthropic ${response.model}`
+                modelInfo: `Anthropic Claude`
               }));
             }
-            
+
             // Parse the batch results
-            const previewData = Array.isArray(response.batchResults) 
-              ? response.batchResults 
+            const previewData = Array.isArray(response.batchResults)
+              ? response.batchResults
               : Array(5).fill('Error: Failed to generate batch preview');
-            
+
             return {
               id: column.id,
               previewData
             };
           } catch (error) {
             console.error(`Error generating preview for column ${column.name}:`, error);
+            // Add more detailed error information based on the error type
+            const errorMessage = error instanceof Error
+              ? error.message
+              : String(error);
+
+            const isTimeout = errorMessage.includes('timeout') ||
+                               errorMessage.includes('504') ||
+                               errorMessage.includes('Gateway');
+
+            // Create a user-friendly error message
+            const userErrorMessage = isTimeout
+              ? 'The server timed out. All retries failed. Please try again later or use a smaller dataset.'
+              : `Error generating preview: ${errorMessage}`;
+
             return {
               id: column.id,
-              previewData: Array(5).fill(`Error generating preview: ${error instanceof Error ? error.message : String(error)}`)
+              previewData: Array(5).fill(userErrorMessage)
             };
           }
         })
       );
-      
+
       // Update all columns' preview data
       const finalColumns = [...newColumns];
       previewResults.forEach(result => {
@@ -404,10 +484,10 @@ export default function FileUploader() {
         }
       });
       setNewColumns(finalColumns);
-      
+
       const processedCount = previewResults.length;
       setSuccess(`Preview data generated for ${processedCount} column(s)! Please review before generating for all rows.`);
-      
+
       // Add toast on successful completion
       toast.success(`Preview data generated for ${processedCount} column(s)!`);
     } catch (error) {
@@ -420,9 +500,11 @@ export default function FileUploader() {
         }
       });
       setNewColumns(restoredColumns);
-      
-      // Use toast to display error
-      toast.error(`Error generating preview: ${error instanceof Error ? error.message : String(error)}`);
+
+      // Use toast to display error with more context
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast.error(`Error generating preview: ${errorMessage}`);
+      setError(`Failed to generate preview: ${errorMessage}. Please try again later.`);
     }
   };
 
@@ -440,27 +522,34 @@ export default function FileUploader() {
         totalRows: 0,
         percentage: 0,
         waitingTime: 0,
-        modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
+        modelInfo: 'Anthropic Claude'
       });
-      
+
       // Initialize new headers and data
       const updatedHeaders = [...fileData.headers];
       let updatedData = [...fileData.data];
-      
+
+      // Calculate total rows for progress tracking
+      const totalRows = fileData.data.length * newColumns.length;
+      setGenerationProgress(prev => ({
+        ...prev,
+        totalRows: totalRows
+      }));
+
       // Generate complete data for each column
       for (let colIndex = 0; colIndex < newColumns.length; colIndex++) {
         const column = newColumns[colIndex];
-        
+
         // Update current column information
         setGenerationProgress(prev => ({
           ...prev,
           currentColumn: column.name,
           processedRows: colIndex * fileData.data.length + column.previewData.length,
-          percentage: Math.round(((colIndex * fileData.data.length + column.previewData.length) / prev.totalRows) * 100)
+          percentage: Math.round(((colIndex * fileData.data.length + column.previewData.length) / totalRows) * 100)
         }));
-        
+
         setSuccess(`Generating data for column "${column.name}" (${colIndex + 1}/${newColumns.length})...`);
-        
+
         // Convert row objects to API format
         const rowObjects = fileData.data.map(row => {
           const rowObj: Record<string, string | number | boolean | null> = {};
@@ -469,38 +558,38 @@ export default function FileUploader() {
           });
           return rowObj;
         });
-        
+
         // Use preview data as first 5 rows, then generate the rest
         const fullGeneratedData = [...column.previewData];
-        
+
         // Only call API for rows outside preview
         if (rowObjects.length > column.previewData.length) {
           const remainingRows = rowObjects.slice(column.previewData.length);
           // [Optimization] Increase batch size to 20
           const batchSize = 20; // Increase from 5 to 20
-          
+
           for (let i = 0; i < remainingRows.length; i += batchSize) {
             const batch = remainingRows.slice(i, i + batchSize);
-            
+
             // Display progress - more detailed progress information
             const currentProgress = colIndex * fileData.data.length + column.previewData.length + i;
-            const percentage = Math.round((currentProgress / (fileData.data.length * newColumns.length)) * 100);
-            
+            const percentage = Math.round((currentProgress / totalRows) * 100);
+
             setGenerationProgress({
               currentColumn: column.name,
               processedRows: currentProgress,
-              totalRows: fileData.data.length * newColumns.length,
+              totalRows: totalRows,
               percentage: percentage,
               waitingTime: 0,
-              modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
+              modelInfo: 'Anthropic Claude'
             });
-            
+
             // Display more detailed progress information
             setSuccess(`Generating: Column "${column.name}" (${colIndex + 1}/${newColumns.length}) | Processed ${currentProgress}/${fileData.data.length} rows | Overall progress: ${percentage}% | Batch size: ${batch.length} items`);
-            
+
             try {
-              // [Optimization] Send entire batch at once instead of processing row by row
-              const response = await rateControlledApiCall<ApiResponse>(async () => {
+              // [Optimization] Send entire batch at once instead of processing row by row, with retry capability
+              const response = await rateControlledApiCallWithRetry<ApiResponse>(async () => {
                 const result = await fetch('/api/generate', {
                   method: 'POST',
                   headers: {
@@ -513,25 +602,41 @@ export default function FileUploader() {
                     isBatch: true // Flag as batch request
                   }),
                 });
+
+                // Check for HTTP errors including timeouts
+                if (!result.ok) {
+                  if (result.status === 504) {
+                    throw new Error('Gateway Timeout (504): Server took too long to respond');
+                  }
+                  throw new Error(`API error: ${result.status} ${result.statusText}`);
+                }
+
                 return await result.json();
               });
-              
+
               // Update model info display
               if (response.model) {
                 setGenerationProgress(prev => ({
                   ...prev,
-                  modelInfo: `Using Anthropic ${response.model}`
+                  modelInfo: `Anthropic Claude`
                 }));
               }
-              
-              // Process batch return results
-              if (Array.isArray(response.batchResults)) {
+
+              // Process batch return results with better error handling
+              if (Array.isArray(response.batchResults) && response.batchResults.length === batch.length) {
                 fullGeneratedData.push(...response.batchResults);
+              } else if (Array.isArray(response.batchResults)) {
+                // If we have results but count doesn't match, fill in the missing ones
+                console.warn(`Batch results length mismatch: expected ${batch.length}, got ${response.batchResults.length}`);
+                const validResults = response.batchResults;
+                const fillerResults = Array(batch.length - validResults.length).fill('Error: Incomplete batch result');
+                fullGeneratedData.push(...validResults, ...fillerResults);
               } else {
-                // If return is not an array, add error information
+                // If return is not an array or is invalid, add error information
+                console.error('Invalid batch results:', response);
                 fullGeneratedData.push(...Array(batch.length).fill('Error: Failed to generate batch content'));
               }
-              
+
               // Update progress information
               setGenerationProgress(prev => ({
                 ...prev,
@@ -540,10 +645,24 @@ export default function FileUploader() {
               }));
             } catch (error) {
               console.error('Error generating content:', error);
-              // Add error information as generated content
-              fullGeneratedData.push(...Array(batch.length).fill(`Error generating content: ${error instanceof Error ? error.message : String(error)}`));
+              // Add error information as generated content with more detailed error messages
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              const isTimeout = errorMessage.includes('timeout') ||
+                                errorMessage.includes('504') ||
+                                errorMessage.includes('Gateway');
+
+              // Create user-friendly error message based on error type
+              const userErrorMessage = isTimeout
+                ? 'Server timeout occurred. Unable to generate content after multiple retries.'
+                : `Error generating content: ${errorMessage}`;
+
+              // Show a toast with the error but continue processing
+              toast.error(`Error in batch: ${userErrorMessage}. Continuing with remaining data.`);
+
+              // Add placeholders for the failed batch
+              fullGeneratedData.push(...Array(batch.length).fill(userErrorMessage));
             }
-            
+
             // Adding a short delay between batches
             if (i + batchSize < remainingRows.length) {
               setSuccess(`Generating: Column "${column.name}" | Completed batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(remainingRows.length/batchSize)} | Preparing next batch...`);
@@ -551,15 +670,15 @@ export default function FileUploader() {
             }
           }
         }
-        
+
         // Determine insert position
-        const insertIndex = column.insertAfter 
+        const insertIndex = column.insertAfter
           ? updatedHeaders.findIndex(h => h === column.insertAfter) + 1
           : updatedHeaders.length;
-        
+
         // Add new column to headers
         updatedHeaders.splice(insertIndex, 0, column.name);
-        
+
         // Add new column data to each row
         updatedData = updatedData.map((row, rowIndex) => {
           const newRow = [...row];
@@ -567,14 +686,14 @@ export default function FileUploader() {
           return newRow;
         });
       }
-      
+
       // Update file data
       setFileData({
         ...fileData,
         headers: updatedHeaders,
         data: updatedData,
       });
-      
+
       // Reset column state
       setNewColumns([{
         id: uuidv4(),
@@ -585,14 +704,14 @@ export default function FileUploader() {
         previewData: [],
         isPreviewApproved: false,
       }]);
-      
+
       // Calculate output filename to display in success message
       const fileExtension = fileData.fileName.split('.').pop()?.toLowerCase() || 'xlsx';
       const outputFileName = fileData.fileName.replace(`.${fileExtension}`, `-enhanced.${fileExtension}`);
-      
+
       // Final message with correct filename
       setSuccess(`${newColumns.length} new columns successfully added! Your file is ready to download as "${outputFileName}" (maintains original ${fileExtension.toUpperCase()} format)`);
-      
+
       // Reset progress indicator
       setGenerationProgress({
         currentColumn: '',
@@ -600,16 +719,17 @@ export default function FileUploader() {
         totalRows: 0,
         percentage: 100,
         waitingTime: 0,
-        modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
+        modelInfo: 'Anthropic Claude'
       });
-      
+
       // Add success notification when complete
       toast.success(`${newColumns.length} new columns successfully added!`);
     } catch (error) {
-      setError(`Error generating data: ${error instanceof Error ? error.message : String(error)}`);
-      
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setError(`Error generating data: ${errorMessage}`);
+
       // Use toast to display error
-      toast.error(`Error generating data: ${error instanceof Error ? error.message : String(error)}`);
+      toast.error(`Error generating data: ${errorMessage}`);
     } finally {
       setIsProcessing(false);
     }
@@ -617,21 +737,21 @@ export default function FileUploader() {
 
   const downloadFile = () => {
     if (!fileData) return;
-    
+
     try {
       const worksheet = XLSX.utils.aoa_to_sheet([fileData.headers, ...fileData.data]);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-      
+
       const originalExtension = fileData.fileName.split('.').pop()?.toLowerCase() || 'xlsx';
       // 保持与上传文件相同的扩展名
       const outputFileName = fileData.fileName.replace(
-        `.${originalExtension}`, 
+        `.${originalExtension}`,
         `-enhanced.${originalExtension}`
       );
-      
+
       console.log(`Exporting file with original extension: ${originalExtension}, output filename: ${outputFileName}`);
-      
+
       // 根据文件类型使用不同的导出方法
       if (originalExtension === 'csv') {
         // 对于CSV文件，使用sheet_to_csv转换并创建下载链接
@@ -641,10 +761,10 @@ export default function FileUploader() {
           blankrows: false,
           forceQuotes: true
         });
-        
+
         // 检查CSV内容是否正确生成
         console.log(`CSV content generated, size: ${csvContent.length} bytes`);
-        
+
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
@@ -658,7 +778,7 @@ export default function FileUploader() {
         console.log('Exporting as Excel format');
         XLSX.writeFile(workbook, outputFileName);
       }
-      
+
       setSuccess(`File downloaded as ${outputFileName} (maintains original ${originalExtension.toUpperCase()} format)`);
     } catch (error) {
       console.error('Error in downloadFile:', error);
@@ -670,48 +790,48 @@ export default function FileUploader() {
   const handleColumnResizeStart = (e: React.MouseEvent, columnIndex: number) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     if (!tableRef.current) return;
-    
+
     const headerCells = tableRef.current.querySelectorAll('thead th');
     const columnElement = headerCells[columnIndex + 1]; // +1 for the # column
-    
+
     if (columnElement) {
       setIsResizing(true);
       setCurrentResizingColumn(columnIndex);
       setStartX(e.clientX);
-      
+
       // Get current column width
       const currentWidth = columnElement.getBoundingClientRect().width;
       setStartWidth(currentWidth);
-      
+
       // Add global mouse move and up event listeners
       document.addEventListener('mousemove', handleColumnResizeMove);
       document.addEventListener('mouseup', handleColumnResizeEnd);
     }
   };
-  
+
   const handleColumnResizeMove = (e: MouseEvent) => {
     if (!isResizing || currentResizingColumn === null) return;
-    
+
     const deltaX = e.clientX - startX;
     const newWidth = Math.max(100, startWidth + deltaX);
-    
+
     setColumnWidths(prevWidths => ({
       ...prevWidths,
       [currentResizingColumn]: newWidth
     }));
   };
-  
+
   const handleColumnResizeEnd = () => {
     setIsResizing(false);
     setCurrentResizingColumn(null);
-    
+
     // Remove global event listeners
     document.removeEventListener('mousemove', handleColumnResizeMove);
     document.removeEventListener('mouseup', handleColumnResizeEnd);
   };
-  
+
   // Cleanup function
   useEffect(() => {
     return () => {
@@ -732,18 +852,18 @@ export default function FileUploader() {
       isPreviewApproved: false,
     }]);
   };
-  
+
   // Remove a column definition
   const removeColumnDefinition = (id: string) => {
     // Ensure at least one column definition is retained
     if (newColumns.length <= 1) return;
-    
+
     setNewColumns(newColumns.filter(col => col.id !== id));
   };
-  
+
   // Update specific column's properties
   const updateColumnProperty = (id: string, property: keyof ColumnInfo, value: string | boolean | undefined | string[]) => {
-    setNewColumns(newColumns.map(col => 
+    setNewColumns(newColumns.map(col =>
       col.id === id ? { ...col, [property]: value } : col
     ));
   };
@@ -752,7 +872,7 @@ export default function FileUploader() {
   const resetState = () => {
     // Only allow reset if not processing
     if (isProcessing) return;
-    
+
     // Reset all state variables
     setFileData(null);
     setNewColumns([{
@@ -775,20 +895,20 @@ export default function FileUploader() {
       totalRows: 0,
       percentage: 0,
       waitingTime: 0,
-      modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
+      modelInfo: 'Anthropic Claude'
     });
-    
+
     // Clear file input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-    
+
     toast.success('Application reset successfully');
   };
 
   return (
     <>
-      <Toaster 
+      <Toaster
         position="top-right"
         toastOptions={{
           duration: 3000,
@@ -812,7 +932,7 @@ export default function FileUploader() {
       />
       <div className="w-full">
         {!fileData && (
-          <div 
+          <div
             className={`border-2 border-dashed rounded-lg p-8 transition-all ease-in-out duration-300 text-center
               ${dragActive ? 'border-[#420039] bg-[#f5e6ff]' : 'border-gray-300 hover:border-[#420039] bg-white'}`}
             onDragEnter={handleDrag}
@@ -871,6 +991,19 @@ export default function FileUploader() {
           </div>
         )}
 
+        {/* Warning message when processing - only display during processing */}
+        {isProcessing && (
+          <div className="p-4 mb-6 text-sm bg-amber-100 text-amber-800 rounded-lg">
+            <div className="flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-amber-600" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <span className="font-medium">Warning:</span>
+              <span className="ml-1">Do not close or refresh this page while processing! Your task will be terminated and all progress will be lost.</span>
+            </div>
+          </div>
+        )}
+
         {fileData && fileData.sheets && !fileData.selectedSheet && (
           <div className="p-6 mb-6 bg-white rounded-lg shadow-sm border border-gray-200">
             <h2 className="mb-4 text-xl font-bold text-[#420039]">Select Worksheet</h2>
@@ -906,7 +1039,7 @@ export default function FileUploader() {
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
-                  <button 
+                  <button
                     className={`px-4 py-2 text-white bg-gray-600 hover:bg-gray-700 rounded-md flex items-center transition-all duration-300 ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
                     onClick={resetState}
                     disabled={isProcessing}
@@ -916,37 +1049,25 @@ export default function FileUploader() {
                     </svg>
                     Reset
                   </button>
-                  <button 
-                    className={`px-4 py-2 text-white rounded-md flex items-center transition-all duration-300 ${success && success.includes('ready to download') 
-                      ? 'bg-green-600 hover:bg-green-700 shadow-md animate-pulse' 
+                  <button
+                    className={`px-4 py-2 text-white rounded-md flex items-center transition-all duration-300 ${success && success.includes('ready to download')
+                      ? 'bg-green-600 hover:bg-green-700 shadow-md animate-pulse'
                       : 'bg-blue-600 hover:bg-blue-700'}`}
                     onClick={downloadFile}
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
-                    {success && success.includes('ready to download') 
-                      ? `Download Now (as ${fileData.fileName.split('.').pop()?.toUpperCase()})` 
+                    {success && success.includes('ready to download')
+                      ? `Download Now (as ${fileData.fileName.split('.').pop()?.toUpperCase()})`
                       : 'Download'}
                   </button>
                 </div>
               </div>
-              
+
               {/* Add new column - multi-column support */}
               <div className="px-4 py-3">
-                {/* Warning message when processing - only display during processing */}
-                {isProcessing && (
-                  <div className="p-3 mb-4 text-sm bg-amber-100 text-amber-800 rounded-lg border border-amber-200 shadow-sm">
-                    <div className="flex items-center">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-amber-600" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                      </svg>
-                      <span className="font-bold text-amber-800">Warning:</span>
-                      <span className="ml-1">Do not close or refresh this page while processing! Your task will be terminated and all progress will be lost.</span>
-                    </div>
-                  </div>
-                )}
-                
+
                 <div className="mb-2 text-sm font-medium text-gray-700 flex items-center justify-between">
                   <span>Add New Columns</span>
                   <button
@@ -956,7 +1077,7 @@ export default function FileUploader() {
                     + Add Another Column
                   </button>
                 </div>
-                
+
                 {/* List all column definitions */}
                 {newColumns.map((column, index) => (
                   <div key={column.id} className="mb-4 p-3 border border-gray-200 rounded-md bg-white">
@@ -976,7 +1097,7 @@ export default function FileUploader() {
                         </button>
                       )}
                     </div>
-                    
+
                     <div className="grid grid-cols-3 gap-3 mb-2">
                       <div>
                         <label className="block text-xs text-gray-500 mb-1">Column Name:</label>
@@ -1028,7 +1149,7 @@ export default function FileUploader() {
                         )}
                       </div>
                     </div>
-                    
+
                     <div className="relative">
                       <textarea
                         className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#420039] focus:border-[#420039] min-h-[60px] text-gray-900 placeholder-gray-600"
@@ -1037,16 +1158,26 @@ export default function FileUploader() {
                         onChange={(e) => updateColumnProperty(column.id, 'prompt', e.target.value)}
                       />
                     </div>
-                    
+
                     {/* Preview data (only display columns with preview data) */}
                     {column.previewData.length > 0 && (
                       <div className="mt-2">
                         <div className="text-xs font-medium text-gray-700 mb-1">Preview Data:</div>
-                        <div className="max-h-32 overflow-y-auto border border-gray-200 rounded p-2 bg-white">
+                        <div className="border border-gray-200 rounded p-2 bg-white w-full">
                           {column.previewData.map((content, idx) => (
-                            <div key={idx} className={`text-xs py-1 px-2 ${idx % 2 === 0 ? 'bg-gray-50' : 'bg-white'}`}>
-                              <span className="font-medium text-gray-700 mr-1">Row {idx + 1}:</span> 
-                              <span className="text-gray-900">{content.length < 50 ? content : `${content.substring(0, 50)}...`}</span>
+                            <div
+                              key={idx}
+                              className={`text-xs py-1 px-2 ${idx % 2 === 0 ? 'bg-gray-50' : 'bg-white'} relative group`}
+                            >
+                              <span className="font-medium text-gray-700 mr-1">Row {idx + 1}:</span>
+                              <span className="text-gray-900 inline-block truncate max-w-full" style={{ maxWidth: "calc(100% - 60px)" }}>
+                                {content}
+                              </span>
+                              {content.length > 30 && (
+                                <div className="absolute z-30 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out max-w-sm left-0 top-full">
+                                  {content}
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1054,13 +1185,13 @@ export default function FileUploader() {
                     )}
                   </div>
                 ))}
-                
+
                 {/* Add unified preview button and generate all columns button */}
                 <div className="mt-4 flex flex-col space-y-3">
                   {/* Progress bar - only show when processing */}
                   {isProcessing && (
                     <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
-                      <div 
+                      <div
                         className="bg-green-600 h-4 text-xs font-medium text-white text-center p-0.5 leading-none rounded-full"
                         style={{ width: `${generationProgress.percentage}%` }}
                       >
@@ -1068,7 +1199,7 @@ export default function FileUploader() {
                       </div>
                     </div>
                   )}
-                  
+
                   {/* More detailed progress information */}
                   {isProcessing && generationProgress.currentColumn && (
                     <div className="text-xs text-gray-700 bg-gray-100 p-2 rounded-md">
@@ -1091,7 +1222,7 @@ export default function FileUploader() {
                       )}
                     </div>
                   )}
-                  
+
                   <div className="flex justify-end space-x-3">
                     <button
                       className={`px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${newColumns.some(col => col.isProcessing) ? 'opacity-75 cursor-wait' : ''}`}
@@ -1106,7 +1237,7 @@ export default function FileUploader() {
                           </svg>
                           Generating Previews...
                         </span>
-                      ) : "Generate All Previews"}
+                      ) : "Generate Previews"}
                     </button>
                     <button
                       className={`px-4 py-2 text-white bg-[#420039] hover:bg-[#5a0050] rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${isProcessing ? 'opacity-75 cursor-wait' : ''}`}
@@ -1121,13 +1252,13 @@ export default function FileUploader() {
                           </svg>
                           Processing...
                         </span>
-                      ) : "Generate All Columns"}
+                      ) : "Generate All"}
                     </button>
                   </div>
                 </div>
               </div>
             </div>
-            
+
             <div className="p-6 mb-6 bg-white rounded-lg shadow-sm border border-gray-200">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-[#420039]">File Preview</h2>
@@ -1150,10 +1281,10 @@ export default function FileUploader() {
                         </div>
                       </th>
                       {fileData.headers.map((header, index) => (
-                        <th 
-                          key={index} 
+                        <th
+                          key={index}
                           className="px-3 py-1.5 font-semibold text-gray-700 border border-gray-200 relative bg-gray-100"
-                          style={{ 
+                          style={{
                             minWidth: "100px",
                             width: columnWidths[index] ? `${columnWidths[index]}px` : undefined
                           }}
@@ -1181,8 +1312,8 @@ export default function FileUploader() {
                   </thead>
                   <tbody>
                     {fileData.data.slice(0, 100).map((row, rowIndex) => (
-                      <tr 
-                        key={rowIndex} 
+                      <tr
+                        key={rowIndex}
                         className={`
                           ${highlightedRow === rowIndex ? 'bg-yellow-100' : rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'} 
                           hover:bg-blue-50
@@ -1195,47 +1326,38 @@ export default function FileUploader() {
                         {row.map((cell, cellIndex) => {
                           const cellValue = String(cell);
                           const isNumeric = !isNaN(Number(cellValue)) && cellValue !== '';
-                          
+                          const header = fileData.headers[cellIndex];
+
                           return (
-                            <td 
-                              key={cellIndex} 
-                              className={`px-3 py-1.5 border border-gray-200 group relative ${isNumeric ? 'text-right' : ''}`}
+                            <td
+                              key={cellIndex}
+                              className={`px-3 py-1.5 border border-gray-200 group relative hover:bg-blue-50 cursor-help ${isNumeric ? 'text-right' : ''}`}
                             >
                               <div className="font-normal text-gray-900 whitespace-normal break-words">
-                                {(!isNaN(Number(cellValue)) || cellValue.length < 12) ? 
-                                  cellValue : 
+                                {(!isNaN(Number(cellValue)) || cellValue.length < 12) ?
+                                  cellValue :
                                   <span>{intelligentTruncate(cellValue, 30)}</span>
                                 }
                               </div>
-                              {cellValue.length > 12 && (
-                                <div className="fixed z-40 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-sm"
-                                  style={{
-                                    left: '50%',
-                                    transform: 'translateX(-50%)',
-                                    bottom: 'calc(100% + 10px)',
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    // Get element position information
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    // If tooltip's top is out of view, show below cell
-                                    if (rect.top < 10) {
-                                      e.currentTarget.style.bottom = 'auto';
-                                      e.currentTarget.style.top = 'calc(100% + 10px)';
-                                    }
-                                    // If tooltip's left or right is out of view, adjust horizontal position
-                                    if (rect.left < 10) {
-                                      e.currentTarget.style.left = '10px';
-                                      e.currentTarget.style.transform = 'none';
-                                    } else if (rect.right > window.innerWidth - 10) {
-                                      e.currentTarget.style.left = 'auto';
-                                      e.currentTarget.style.right = '10px';
-                                      e.currentTarget.style.transform = 'none';
-                                    }
-                                  }}
-                                >
-                                  {cellValue}
+                              {/* 为所有单元格添加悬停显示内容 */}
+                              <div className="absolute z-50 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-[300px]"
+                                style={{
+                                  left: '50%',
+                                  transform: 'translateX(-50%)',
+                                  bottom: 'calc(100% + 5px)',
+                                  minWidth: '150px'
+                                }}
+                              >
+                                <div className="font-semibold text-blue-300 mb-1 border-b border-gray-600 pb-1">
+                                  Row: {rowIndex + 1} | Column: {header}
                                 </div>
-                              )}
+                                <div className="pt-1">
+                                  {cellValue
+                                    ? cellValue
+                                    : <span className="italic text-gray-400">Empty cell</span>
+                                  }
+                                </div>
+                              </div>
                             </td>
                           );
                         })}
@@ -1261,4 +1383,4 @@ export default function FileUploader() {
       </div>
     </>
   );
-} 
+}

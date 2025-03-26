@@ -15,7 +15,7 @@ export default function Home() {
             </div>
             <h1 className="text-3xl font-bold text-[#420039]">Tablextend</h1>
           </div>
-          
+
           {/* Hero Content */}
           <h2 className="text-4xl md:text-5xl font-bold text-[#420039] mb-5 text-center">
             Enrich Your Table with AI
@@ -36,17 +36,17 @@ export default function Home() {
             </div>
             <div className="text-sm flex items-center justify-center mt-1">
               For files larger than 5MB (up to 1GB), please use{" "}
-              <a 
-                href="https://powerdrill.ai/" 
-                target="_blank" 
-                rel="noopener noreferrer" 
+              <a
+                href="https://powerdrill.ai/"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="font-semibold hover:underline flex items-center ml-1"
               >
-                <Image 
-                  src="/powerdrill_logo_color.png" 
-                  alt="powerdrill.ai logo" 
-                  width={100} 
-                  height={40} 
+                <Image
+                  src="/powerdrill_logo_color.png"
+                  alt="powerdrill.ai logo"
+                  width={100}
+                  height={40}
                   className="inline-block"
                 />
                 <span className="ml-2 text-[#420039]">powerdrill.ai</span>

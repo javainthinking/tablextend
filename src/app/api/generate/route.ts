@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
       try {
         console.log(`Using Anthropic model ${model} for batch processing of ${batchData.length} items`);
-        
+
         // Build a more efficient batch processing prompt
         const combinedPrompt = `
 I need you to process the following ${batchData.length} data records and generate content for each record.
@@ -53,26 +53,26 @@ Ensure the output is valid JSON and each record's answer is an independent strin
             }
           ],
         });
-        
+
         // Extract generated content
         let generatedContent = 'No content generated';
         let batchResults: string[] = [];
-        
+
         if (response.content && response.content.length > 0) {
           const firstBlock = response.content[0];
           if ('text' in firstBlock) {
             generatedContent = firstBlock.text;
-            
+
             // Try to parse JSON array from the response
             try {
               // Find start and end positions of the JSON array
               const jsonStart = generatedContent.indexOf('[');
               const jsonEnd = generatedContent.lastIndexOf(']') + 1;
-              
+
               if (jsonStart >= 0 && jsonEnd > jsonStart) {
                 const jsonString = generatedContent.substring(jsonStart, jsonEnd);
                 const parsedResults = JSON.parse(jsonString);
-                
+
                 if (Array.isArray(parsedResults)) {
                   batchResults = parsedResults;
                   // Ensure the number of results matches the input count
@@ -96,13 +96,13 @@ Ensure the output is valid JSON and each record's answer is an independent strin
         } else {
           batchResults = Array(batchData.length).fill('No content generated');
         }
-        
+
         // If parsing failed or results are empty, ensure we have results equal to input data count
         if (batchResults.length === 0) {
           batchResults = Array(batchData.length).fill('Failed to generate batch content');
         }
-        
-        return NextResponse.json({ 
+
+        return NextResponse.json({
           success: true,
           generatedContent, // Keep original content for debugging
           batchResults,     // Add batch results array
@@ -111,10 +111,10 @@ Ensure the output is valid JSON and each record's answer is an independent strin
         });
       } catch (apiError) {
         console.error('Anthropic API error in batch processing:', apiError);
-        
+
         // If an error occurs, return response with error details
         return NextResponse.json(
-          { 
+          {
             error: 'Failed to generate batch content with Anthropic',
             details: apiError instanceof Error ? apiError.message : 'Unknown API error',
             provider: 'anthropic',
@@ -133,7 +133,7 @@ Ensure the output is valid JSON and each record's answer is an independent strin
     } else {
       try {
         console.log('Using Anthropic model:', model);
-        
+
         // Call Anthropic API to generate content
         const response = await anthropic.messages.create({
           model: model,
@@ -147,7 +147,7 @@ Ensure the output is valid JSON and each record's answer is an independent strin
             }
           ],
         });
-        
+
         // Extract generated content
         let generatedContent = 'No content generated';
         if (response.content && response.content.length > 0) {
@@ -159,8 +159,8 @@ Ensure the output is valid JSON and each record's answer is an independent strin
             generatedContent = `[Content type: ${firstBlock.type}]`;
           }
         }
-        
-        return NextResponse.json({ 
+
+        return NextResponse.json({
           success: true,
           generatedContent,
           provider: 'anthropic',
@@ -168,10 +168,10 @@ Ensure the output is valid JSON and each record's answer is an independent strin
         });
       } catch (apiError) {
         console.error('Anthropic API error:', apiError);
-        
+
         // If an error occurs, return response with error details
         return NextResponse.json(
-          { 
+          {
             error: 'Failed to generate content with Anthropic',
             details: apiError instanceof Error ? apiError.message : 'Unknown API error',
             provider: 'anthropic'
@@ -183,11 +183,11 @@ Ensure the output is valid JSON and each record's answer is an independent strin
   } catch (error) {
     console.error('Error in AI generation:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to generate content',
-        details: error instanceof Error ? error.message : 'Unknown error' 
+        details: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }
     );
   }
-} 
+}
