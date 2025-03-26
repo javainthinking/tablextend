@@ -13,6 +13,7 @@ type FileData = {
   data: (string | number | boolean | null)[][];
   sheets?: string[];
   selectedSheet?: string;
+  rawData?: Uint8Array;
 };
 
 type ColumnInfo = {
@@ -165,20 +166,20 @@ export default function FileUploader() {
     throw lastError;
   };
 
-  // Optimized helper function: intelligently truncate text for reasonable display
+  // Modify the intelligentTruncate function to better handle empty or unnamed headers
   const intelligentTruncate = (text: string, maxLength = 20) => {
     if (!text) return '';
     const str = String(text);
-
+    // Check if it's an auto-generated column name
+    if (str.startsWith('Column_')) {
+      return str;
+    }
     // If text length is less than max length, return directly
     if (str.length <= maxLength) return str;
-
     // For longer numbers, display in full
     if (!isNaN(Number(str)) && str.length < 30) return str;
-
     // For shorter text, show more content
     if (str.length < 30) return str;
-
     // For medium-length text, truncate appropriately
     return `${str.substring(0, maxLength)}...`;
   };
@@ -281,7 +282,9 @@ export default function FileUploader() {
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
           if (jsonData.length > 0) {
-            const headers = jsonData[0] as string[];
+            // Process headers to handle empty values
+            const rawHeaders = jsonData[0] as (string | number | boolean | null | undefined)[];
+            const headers = rawHeaders.map((header, index) => header ? String(header) : `Column_${index + 1}`);
             const rows = jsonData.slice(1) as (string | number | boolean | null)[][];
 
             setFileData({
@@ -305,6 +308,7 @@ export default function FileUploader() {
             headers: [],
             data: [],
             sheets,
+            rawData: data, // Store the raw file data to use when selecting sheets
           });
         }
       } catch (error) {
@@ -323,39 +327,37 @@ export default function FileUploader() {
     if (!fileData || !fileData.sheets) return;
 
     try {
-      const file = fileInputRef.current?.files?.[0];
-      if (!file) return;
+      // Use the stored raw data instead of reading the file again
+      if (!fileData.rawData) {
+        setError('File data not available. Please upload the file again.');
+        return;
+      }
 
-      const reader = new FileReader();
+      try {
+        const workbook = XLSX.read(fileData.rawData, { type: 'array' });
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-      reader.onload = (e) => {
-        try {
-          const data = new Uint8Array(e.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const worksheet = workbook.Sheets[sheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        if (jsonData.length > 0) {
+          // Process headers to handle empty values
+          const rawHeaders = jsonData[0] as (string | number | boolean | null | undefined)[];
+          const headers = rawHeaders.map((header, index) => header ? String(header) : `Column_${index + 1}`);
+          const rows = jsonData.slice(1) as (string | number | boolean | null)[][];
 
-          if (jsonData.length > 0) {
-            const headers = jsonData[0] as string[];
-            const rows = jsonData.slice(1) as (string | number | boolean | null)[][];
+          setFileData({
+            ...fileData,
+            headers,
+            data: rows,
+            selectedSheet: sheetName,
+          });
 
-            setFileData({
-              ...fileData,
-              headers,
-              data: rows,
-              selectedSheet: sheetName,
-            });
-
-            setSuccess(`Sheet "${sheetName}" selected successfully!`);
-          } else {
-            setError(`Selected sheet "${sheetName}" is empty or invalid.`);
-          }
-        } catch (error) {
-          setError(`Error parsing sheet "${sheetName}": ${error instanceof Error ? error.message : String(error)}`);
+          setSuccess(`Sheet "${sheetName}" selected successfully!`);
+        } else {
+          setError(`Selected sheet "${sheetName}" is empty or invalid.`);
         }
-      };
-
-      reader.readAsArrayBuffer(file);
+      } catch (error) {
+        setError(`Error parsing sheet "${sheetName}": ${error instanceof Error ? error.message : String(error)}`);
+      }
     } catch (error) {
       setError(`Error selecting sheet: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1173,11 +1175,29 @@ export default function FileUploader() {
                               <span className="text-gray-900 inline-block truncate max-w-full" style={{ maxWidth: "calc(100% - 60px)" }}>
                                 {content}
                               </span>
-                              {content.length > 30 && (
-                                <div className="absolute z-30 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out max-w-sm left-0 top-full">
-                                  {content}
+                              {/* Improved tooltip for file preview cells */}
+                              <div className="absolute z-50 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-[300px]"
+                                style={{
+                                  left: '0',
+                                  right: '0',
+                                  margin: '0 auto',
+                                  top: 'auto',
+                                  bottom: 'auto',
+                                  transform: 'translateY(-100%)',
+                                  marginTop: '-8px'
+                                }}
+                              >
+                                <div className="font-semibold text-blue-300 mb-1 border-b border-gray-600 pb-1">
+                                  Row: {idx + 1} | Column: {fileData.headers[idx]}
                                 </div>
-                              )}
+                                <div className="pt-1">
+                                  {content !== null && content !== undefined && String(content).trim() !== ''
+                                    ? String(content)
+                                    : <span className="italic text-gray-400">Empty cell</span>
+                                  }
+                                </div>
+                                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1/2 rotate-45 w-2 h-2 bg-gray-800"></div>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1291,7 +1311,7 @@ export default function FileUploader() {
                         >
                           <div className="flex items-center justify-between">
                             <div className="flex items-center">
-                              <span>{intelligentTruncate(header, 20)}</span>
+                              <span className={header.startsWith('Column_') ? 'italic text-gray-500' : ''}>{intelligentTruncate(header, 20)}</span>
                               <span className="ml-1 text-gray-400">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4" />
@@ -1324,39 +1344,69 @@ export default function FileUploader() {
                           {rowIndex + 1}
                         </td>
                         {row.map((cell, cellIndex) => {
-                          const cellValue = String(cell);
-                          const isNumeric = !isNaN(Number(cellValue)) && cellValue !== '';
                           const header = fileData.headers[cellIndex];
+                          // Improved cell value handling with better empty value display
+                          let displayValue = '';
+                          let cellClassName = 'font-normal text-gray-900 whitespace-normal break-words';
+                          if (cell === null || cell === undefined || cell === '') {
+                            // Empty cell display
+                            displayValue = '-';
+                            cellClassName = 'font-normal text-gray-400 italic whitespace-normal break-words';
+                          } else if (typeof cell === 'string') {
+                            if (cell.trim() === '') {
+                              // Empty string display
+                              displayValue = '-';
+                              cellClassName = 'font-normal text-gray-400 italic whitespace-normal break-words';
+                            } else {
+                              // Regular string display
+                              displayValue = cell;
+                            }
+                          } else if (typeof cell === 'number') {
+                            // Check if it's essentially zero (very small number)
+                            if (Math.abs(cell) < 0.000001) {
+                              displayValue = '0';
+                            } else {
+                              displayValue = String(cell);
+                              cellClassName += ' text-right';
+                            }
+                          } else {
+                            // Convert any other type to string
+                            displayValue = String(cell);
+                          }
 
                           return (
                             <td
                               key={cellIndex}
-                              className={`px-3 py-1.5 border border-gray-200 group relative hover:bg-blue-50 cursor-help ${isNumeric ? 'text-right' : ''}`}
+                              className={`px-3 py-1.5 border border-gray-200 group relative hover:bg-blue-50 cursor-help`}
                             >
-                              <div className="font-normal text-gray-900 whitespace-normal break-words">
-                                {(!isNaN(Number(cellValue)) || cellValue.length < 12) ?
-                                  cellValue :
-                                  <span>{intelligentTruncate(cellValue, 30)}</span>
+                              <div className={cellClassName}>
+                                {(!isNaN(Number(displayValue)) && displayValue.length < 12) || displayValue === '-' ?
+                                  displayValue :
+                                  <span>{intelligentTruncate(displayValue, 30)}</span>
                                 }
                               </div>
-                              {/* 为所有单元格添加悬停显示内容 */}
+                              {/* Improved tooltip for file preview cells */}
                               <div className="absolute z-50 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-[300px]"
                                 style={{
-                                  left: '50%',
-                                  transform: 'translateX(-50%)',
-                                  bottom: 'calc(100% + 5px)',
-                                  minWidth: '150px'
+                                  left: '0',
+                                  right: '0',
+                                  margin: '0 auto',
+                                  top: 'auto',
+                                  bottom: 'auto',
+                                  transform: 'translateY(-100%)',
+                                  marginTop: '-8px'
                                 }}
                               >
                                 <div className="font-semibold text-blue-300 mb-1 border-b border-gray-600 pb-1">
                                   Row: {rowIndex + 1} | Column: {header}
                                 </div>
                                 <div className="pt-1">
-                                  {cellValue
-                                    ? cellValue
+                                  {cell !== null && cell !== undefined && String(cell).trim() !== ''
+                                    ? String(cell)
                                     : <span className="italic text-gray-400">Empty cell</span>
                                   }
                                 </div>
+                                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1/2 rotate-45 w-2 h-2 bg-gray-800"></div>
                               </div>
                             </td>
                           );
