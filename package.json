@@ -3,21 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.0",
+    "@anthropic-ai/sdk": "^0.39.0",
     "@mantine/dropzone": "^7.17.2",
+    "@tanstack/react-table": "^8.21.2",
     "daisyui": "^5.0.9",
     "next": "15.2.3",
     "next-auth": "^4.24.11",
-    "openai": "^4.89.0",
     "papaparse": "^5.5.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-hot-toast": "^2.5.2",
     "uuid": "^11.1.0",
     "xlsx": "^0.18.5"
   },

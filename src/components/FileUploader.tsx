@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect, ReactNode } from 'react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import { v4 as uuidv4 } from 'uuid';
+import toast, { Toaster } from 'react-hot-toast';
 
 type FileData = {
   id: string;
@@ -15,6 +16,7 @@ type FileData = {
 };
 
 type ColumnInfo = {
+  id: string;
   name: string;
   prompt: string;
   insertAfter?: string;
@@ -23,38 +25,103 @@ type ColumnInfo = {
   isPreviewApproved: boolean;
 };
 
+// Add an interface to define API response type
+interface ApiResponse {
+  success: boolean;
+  generatedContent: string;
+  provider: string;
+  model?: string;
+  error?: string;
+  details?: string;
+  batchResults?: string[];
+}
+
 export default function FileUploader() {
   const [fileData, setFileData] = useState<FileData | null>(null);
-  const [newColumn, setNewColumn] = useState<ColumnInfo>({
-    name: '',
-    prompt: '',
-    insertAfter: undefined,
-    isProcessing: false,
-    previewData: [],
-    isPreviewApproved: false,
-  });
+  const [newColumns, setNewColumns] = useState<ColumnInfo[]>([
+    {
+      id: uuidv4(),
+      name: '',
+      prompt: '',
+      insertAfter: undefined,
+      isProcessing: false,
+      previewData: [],
+      isPreviewApproved: false,
+    }
+  ]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ReactNode | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   
+  // Add column width state management
+  const [columnWidths, setColumnWidths] = useState<Record<number, number>>({});
+  const [isResizing, setIsResizing] = useState(false);
+  const [currentResizingColumn, setCurrentResizingColumn] = useState<number | null>(null);
+  const [startX, setStartX] = useState(0);
+  const [startWidth, setStartWidth] = useState(0);
+  
+  // Add highlighted row functionality
+  const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
+  
+  // Add progress tracking state
+  const [generationProgress, setGenerationProgress] = useState<{
+    currentColumn: string;
+    processedRows: number;
+    totalRows: number;
+    percentage: number;
+    waitingTime: number;
+    modelInfo: string;
+  }>({
+    currentColumn: '',
+    processedRows: 0,
+    totalRows: 0,
+    percentage: 0,
+    waitingTime: 0,
+    modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
+  });
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const tableRef = useRef<HTMLTableElement>(null);
 
-  // 优化后的辅助函数：智能截断文本，保持合理显示
+  // Add delay utility function to ensure API call intervals
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  
+  // Track API call frequency to avoid exceeding API limits
+  const [lastApiCallTime, setLastApiCallTime] = useState<number>(0);
+  
+  // Monitor and control API call rate
+  const rateControlledApiCall = async <T,>(apiCallFn: () => Promise<T>): Promise<T> => {
+    // Check time since last API call
+    const now = Date.now();
+    const timeSinceLastCall = now - lastApiCallTime;
+    const minTimeBetweenCalls = 500; // Minimum interval 500ms
+    
+    // If needed, add delay to ensure API call spacing
+    if (timeSinceLastCall < minTimeBetweenCalls) {
+      await delay(minTimeBetweenCalls - timeSinceLastCall);
+    }
+    
+    // Update last call time and execute API call
+    setLastApiCallTime(Date.now());
+    return apiCallFn();
+  };
+
+  // Optimized helper function: intelligently truncate text for reasonable display
   const intelligentTruncate = (text: string, maxLength = 20) => {
     if (!text) return '';
     const str = String(text);
     
-    // 如果文本长度小于最大长度，直接返回
+    // If text length is less than max length, return directly
     if (str.length <= maxLength) return str;
     
-    // 对于较长的数字，保持完整显示
+    // For longer numbers, display in full
     if (!isNaN(Number(str)) && str.length < 30) return str;
     
-    // 对于较短的文本，显示更多内容
+    // For shorter text, show more content
     if (str.length < 30) return str;
     
-    // 对于中等长度的文本，适当截断
+    // For medium-length text, truncate appropriately
     return `${str.substring(0, maxLength)}...`;
   };
 
@@ -92,6 +159,14 @@ export default function FileUploader() {
     setError(null);
     setSuccess(null);
     setFileData(null);
+
+    // Check file size - prevent files larger than 5MB
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
+    if (file.size > MAX_FILE_SIZE) {
+      setError(<>File size ({(file.size / (1024 * 1024)).toFixed(2)}MB) exceeds the maximum limit of 5MB. Please use&nbsp;<a href="https://powerdrill.ai" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">powerdrill.ai</a>&nbsp;for larger files.</>);
+      toast.error(`File size exceeds the 5MB limit`);
+      return;
+    }
 
     const fileName = file.name;
     const fileExtension = fileName.split('.').pop()?.toLowerCase();
@@ -228,17 +303,36 @@ export default function FileUploader() {
     }
   };
 
-  const generatePreviewData = async () => {
-    if (!fileData || !newColumn.name || !newColumn.prompt) {
-      setError('Please provide a column name and prompt before generating preview.');
+  // Updated function, supporting multi-column or single-column preview generation - batch processing version
+  const generatePreviewData = async (columnId?: string) => {
+    if (!fileData) {
+      setError('Please upload a file first.');
       return;
     }
     
-    setNewColumn({ ...newColumn, isProcessing: true });
+    // Determine which columns to process
+    const columnsToProcess = columnId 
+      ? newColumns.filter(col => col.id === columnId) 
+      : newColumns.filter(col => col.name && col.prompt);
+    
+    if (columnsToProcess.length === 0) {
+      setError('Please provide column name and prompt before generating preview.');
+      return;
+    }
+    
+    // Update all columns to be processed
+    const updatedColumns = [...newColumns];
+    columnsToProcess.forEach(column => {
+      const idx = newColumns.findIndex(col => col.id === column.id);
+      if (idx !== -1) {
+        updatedColumns[idx] = { ...column, isProcessing: true };
+      }
+    });
+    setNewColumns(updatedColumns);
     setError(null);
     
     try {
-      // Get first 5 rows of data to use for preview generation
+      // Get first 5 rows of data for preview generation
       const previewRowData = fileData.data.slice(0, 5).map((row) => {
         // Create an object with column names as keys
         const rowObj: Record<string, string | number | boolean | null> = {};
@@ -248,147 +342,274 @@ export default function FileUploader() {
         return rowObj;
       });
       
-      // Call the AI API endpoint for each row
-      const previewPromises = previewRowData.map(async (rowData, index) => {
-        try {
-          const response = await fetch('/api/generate', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              prompt: newColumn.prompt,
-              rowData,
-            }),
-          });
-          
-          if (!response.ok) {
-            throw new Error(`API error: ${response.status}`);
-          }
-          
-          const result = await response.json();
-          return result.generatedContent;
-        } catch (error) {
-          console.error(`Error generating content for row ${index + 1}:`, error);
-          return `Error generating content for row ${index + 1}`;
-        }
-      });
-      
-      // Wait for all API calls to complete
-      const samplePreviewData = await Promise.all(previewPromises);
-      
-      setNewColumn({
-        ...newColumn,
-        isProcessing: false,
-        previewData: samplePreviewData,
-      });
-      
-      setSuccess('Preview data generated! Please review before generating for all rows.');
-    } catch (error) {
-      setNewColumn({ ...newColumn, isProcessing: false });
-      setError(`Error generating preview: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
-  const generateFullData = async () => {
-    if (!fileData || !newColumn.name || newColumn.previewData.length === 0) {
-      return;
-    }
-    
-    setIsProcessing(true);
-    setError(null);
-    
-    try {
-      // Get column headers to determine index for insertion
-      const updatedHeaders = [...fileData.headers];
-      
-      // Convert rows to objects with named properties (for the API)
-      const rowObjects = fileData.data.map(row => {
-        const rowObj: Record<string, string | number | boolean | null> = {};
-        fileData.headers.forEach((header, colIndex) => {
-          rowObj[header] = row[colIndex];
-        });
-        return rowObj;
-      });
-      
-      // Use the preview data for the first 5 rows, then generate the rest
-      const fullGeneratedData = [...newColumn.previewData];
-      
-      // Only call API for rows beyond what we already have in preview
-      if (rowObjects.length > newColumn.previewData.length) {
-        const remainingRows = rowObjects.slice(newColumn.previewData.length);
-        const batchSize = 5; // Process in small batches to avoid overwhelming the API
-        
-        for (let i = 0; i < remainingRows.length; i += batchSize) {
-          const batch = remainingRows.slice(i, i + batchSize);
-          
-          // Show progress
-          setSuccess(`Generating data for rows ${newColumn.previewData.length + i + 1} to ${Math.min(newColumn.previewData.length + i + batch.length, fileData.data.length)}...`);
-          
-          // Generate content for this batch in parallel
-          const batchPromises = batch.map(async (rowData) => {
-            try {
-              const response = await fetch('/api/generate', {
+      // Generate preview for each column - batch process all preview rows for each column at once
+      const previewResults = await Promise.all(
+        columnsToProcess.map(async (column) => {
+          try {
+            // [Optimization] Batch process all preview rows, send request once
+            const response = await rateControlledApiCall<ApiResponse>(async () => {
+              const result = await fetch('/api/generate', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                  prompt: newColumn.prompt,
-                  rowData,
+                  prompt: column.prompt,
+                  // Send the entire preview data batch
+                  batchData: previewRowData,
+                  model: 'claude-3-haiku-20240307', // Using Claude 3 Haiku model for preview
+                  isBatch: true // Flag as batch request
                 }),
               });
-              
-              if (!response.ok) {
-                throw new Error(`API error: ${response.status}`);
-              }
-              
-              const result = await response.json();
-              return result.generatedContent;
-            } catch (error) {
-              console.error('Error generating content:', error);
-              return `Error generating content: ${error instanceof Error ? error.message : String(error)}`;
+              return await result.json();
+            });
+            
+            // Update model info display
+            if (response.model) {
+              setGenerationProgress(prev => ({
+                ...prev,
+                modelInfo: `Using Anthropic ${response.model}`
+              }));
             }
-          });
-          
-          // Wait for current batch to complete and add to results
-          const batchResults = await Promise.all(batchPromises);
-          fullGeneratedData.push(...batchResults);
+            
+            // Parse the batch results
+            const previewData = Array.isArray(response.batchResults) 
+              ? response.batchResults 
+              : Array(5).fill('Error: Failed to generate batch preview');
+            
+            return {
+              id: column.id,
+              previewData
+            };
+          } catch (error) {
+            console.error(`Error generating preview for column ${column.name}:`, error);
+            return {
+              id: column.id,
+              previewData: Array(5).fill(`Error generating preview: ${error instanceof Error ? error.message : String(error)}`)
+            };
+          }
+        })
+      );
+      
+      // Update all columns' preview data
+      const finalColumns = [...newColumns];
+      previewResults.forEach(result => {
+        const idx = finalColumns.findIndex(col => col.id === result.id);
+        if (idx !== -1) {
+          finalColumns[idx] = {
+            ...finalColumns[idx],
+            isProcessing: false,
+            previewData: result.previewData,
+          };
         }
-      }
+      });
+      setNewColumns(finalColumns);
       
-      // Add the new column to the data
-      const insertIndex = newColumn.insertAfter 
-        ? updatedHeaders.findIndex(h => h === newColumn.insertAfter) + 1
-        : updatedHeaders.length;
+      const processedCount = previewResults.length;
+      setSuccess(`Preview data generated for ${processedCount} column(s)! Please review before generating for all rows.`);
       
-      updatedHeaders.splice(insertIndex, 0, newColumn.name);
+      // Add toast on successful completion
+      toast.success(`Preview data generated for ${processedCount} column(s)!`);
+    } catch (error) {
+      // Reset all columns' processing state
+      const restoredColumns = [...newColumns];
+      columnsToProcess.forEach(column => {
+        const idx = restoredColumns.findIndex(col => col.id === column.id);
+        if (idx !== -1) {
+          restoredColumns[idx] = { ...restoredColumns[idx], isProcessing: false };
+        }
+      });
+      setNewColumns(restoredColumns);
       
-      const updatedData = fileData.data.map((row, rowIndex) => {
-        const newRow = [...row];
-        newRow.splice(insertIndex, 0, fullGeneratedData[rowIndex]);
-        return newRow;
+      // Use toast to display error
+      toast.error(`Error generating preview: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const generateFullData = async () => {
+    if (!fileData || !newColumns.length || isProcessing) {
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      // Reset progress state
+      setGenerationProgress({
+        currentColumn: '',
+        processedRows: 0,
+        totalRows: 0,
+        percentage: 0,
+        waitingTime: 0,
+        modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
       });
       
+      // Initialize new headers and data
+      const updatedHeaders = [...fileData.headers];
+      let updatedData = [...fileData.data];
+      
+      // Generate complete data for each column
+      for (let colIndex = 0; colIndex < newColumns.length; colIndex++) {
+        const column = newColumns[colIndex];
+        
+        // Update current column information
+        setGenerationProgress(prev => ({
+          ...prev,
+          currentColumn: column.name,
+          processedRows: colIndex * fileData.data.length + column.previewData.length,
+          percentage: Math.round(((colIndex * fileData.data.length + column.previewData.length) / prev.totalRows) * 100)
+        }));
+        
+        setSuccess(`Generating data for column "${column.name}" (${colIndex + 1}/${newColumns.length})...`);
+        
+        // Convert row objects to API format
+        const rowObjects = fileData.data.map(row => {
+          const rowObj: Record<string, string | number | boolean | null> = {};
+          fileData.headers.forEach((header, colIndex) => {
+            rowObj[header] = row[colIndex];
+          });
+          return rowObj;
+        });
+        
+        // Use preview data as first 5 rows, then generate the rest
+        const fullGeneratedData = [...column.previewData];
+        
+        // Only call API for rows outside preview
+        if (rowObjects.length > column.previewData.length) {
+          const remainingRows = rowObjects.slice(column.previewData.length);
+          // [Optimization] Increase batch size to 20
+          const batchSize = 20; // Increase from 5 to 20
+          
+          for (let i = 0; i < remainingRows.length; i += batchSize) {
+            const batch = remainingRows.slice(i, i + batchSize);
+            
+            // Display progress - more detailed progress information
+            const currentProgress = colIndex * fileData.data.length + column.previewData.length + i;
+            const percentage = Math.round((currentProgress / (fileData.data.length * newColumns.length)) * 100);
+            
+            setGenerationProgress({
+              currentColumn: column.name,
+              processedRows: currentProgress,
+              totalRows: fileData.data.length * newColumns.length,
+              percentage: percentage,
+              waitingTime: 0,
+              modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
+            });
+            
+            // Display more detailed progress information
+            setSuccess(`Generating: Column "${column.name}" (${colIndex + 1}/${newColumns.length}) | Processed ${currentProgress}/${fileData.data.length} rows | Overall progress: ${percentage}% | Batch size: ${batch.length} items`);
+            
+            try {
+              // [Optimization] Send entire batch at once instead of processing row by row
+              const response = await rateControlledApiCall<ApiResponse>(async () => {
+                const result = await fetch('/api/generate', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    prompt: column.prompt,
+                    batchData: batch,
+                    model: 'claude-3-haiku-20240307', // Use Claude 3 Haiku model for final generation
+                    isBatch: true // Flag as batch request
+                  }),
+                });
+                return await result.json();
+              });
+              
+              // Update model info display
+              if (response.model) {
+                setGenerationProgress(prev => ({
+                  ...prev,
+                  modelInfo: `Using Anthropic ${response.model}`
+                }));
+              }
+              
+              // Process batch return results
+              if (Array.isArray(response.batchResults)) {
+                fullGeneratedData.push(...response.batchResults);
+              } else {
+                // If return is not an array, add error information
+                fullGeneratedData.push(...Array(batch.length).fill('Error: Failed to generate batch content'));
+              }
+              
+              // Update progress information
+              setGenerationProgress(prev => ({
+                ...prev,
+                processedRows: prev.processedRows + batch.length,
+                percentage: Math.round(((prev.processedRows + batch.length) / prev.totalRows) * 100)
+              }));
+            } catch (error) {
+              console.error('Error generating content:', error);
+              // Add error information as generated content
+              fullGeneratedData.push(...Array(batch.length).fill(`Error generating content: ${error instanceof Error ? error.message : String(error)}`));
+            }
+            
+            // Adding a short delay between batches
+            if (i + batchSize < remainingRows.length) {
+              setSuccess(`Generating: Column "${column.name}" | Completed batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(remainingRows.length/batchSize)} | Preparing next batch...`);
+              await delay(2000); // Wait 2 seconds between batches
+            }
+          }
+        }
+        
+        // Determine insert position
+        const insertIndex = column.insertAfter 
+          ? updatedHeaders.findIndex(h => h === column.insertAfter) + 1
+          : updatedHeaders.length;
+        
+        // Add new column to headers
+        updatedHeaders.splice(insertIndex, 0, column.name);
+        
+        // Add new column data to each row
+        updatedData = updatedData.map((row, rowIndex) => {
+          const newRow = [...row];
+          newRow.splice(insertIndex, 0, fullGeneratedData[rowIndex] || '');
+          return newRow;
+        });
+      }
+      
+      // Update file data
       setFileData({
         ...fileData,
         headers: updatedHeaders,
         data: updatedData,
       });
       
-      // Reset new column state
-      setNewColumn({
+      // Reset column state
+      setNewColumns([{
+        id: uuidv4(),
         name: '',
         prompt: '',
         insertAfter: undefined,
         isProcessing: false,
         previewData: [],
         isPreviewApproved: false,
+      }]);
+      
+      // Calculate output filename to display in success message
+      const fileExtension = fileData.fileName.split('.').pop()?.toLowerCase() || 'xlsx';
+      const outputFileName = fileData.fileName.replace(`.${fileExtension}`, `-enhanced.${fileExtension}`);
+      
+      // Final message with correct filename
+      setSuccess(`${newColumns.length} new columns successfully added! Your file is ready to download as "${outputFileName}" (maintains original ${fileExtension.toUpperCase()} format)`);
+      
+      // Reset progress indicator
+      setGenerationProgress({
+        currentColumn: '',
+        processedRows: 0,
+        totalRows: 0,
+        percentage: 100,
+        waitingTime: 0,
+        modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
       });
       
-      setSuccess('New column added successfully!');
+      // Add success notification when complete
+      toast.success(`${newColumns.length} new columns successfully added!`);
     } catch (error) {
       setError(`Error generating data: ${error instanceof Error ? error.message : String(error)}`);
+      
+      // Use toast to display error
+      toast.error(`Error generating data: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsProcessing(false);
     }
@@ -402,303 +623,642 @@ export default function FileUploader() {
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
       
-      const fileExtension = fileData.fileName.split('.').pop()?.toLowerCase();
-      const outputFileName = fileData.fileName.replace(`.${fileExtension}`, `-enhanced.xlsx`);
+      const originalExtension = fileData.fileName.split('.').pop()?.toLowerCase() || 'xlsx';
+      // 保持与上传文件相同的扩展名
+      const outputFileName = fileData.fileName.replace(
+        `.${originalExtension}`, 
+        `-enhanced.${originalExtension}`
+      );
       
-      XLSX.writeFile(workbook, outputFileName);
-      setSuccess(`File downloaded as ${outputFileName}`);
+      console.log(`Exporting file with original extension: ${originalExtension}, output filename: ${outputFileName}`);
+      
+      // 根据文件类型使用不同的导出方法
+      if (originalExtension === 'csv') {
+        // 对于CSV文件，使用sheet_to_csv转换并创建下载链接
+        console.log('Exporting as CSV format');
+        // 增强CSV导出，更好地处理特殊字符和逗号
+        const csvContent = XLSX.utils.sheet_to_csv(worksheet, {
+          blankrows: false,
+          forceQuotes: true
+        });
+        
+        // 检查CSV内容是否正确生成
+        console.log(`CSV content generated, size: ${csvContent.length} bytes`);
+        
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = outputFileName;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else {
+        // 对于Excel文件，使用writeFile
+        console.log('Exporting as Excel format');
+        XLSX.writeFile(workbook, outputFileName);
+      }
+      
+      setSuccess(`File downloaded as ${outputFileName} (maintains original ${originalExtension.toUpperCase()} format)`);
     } catch (error) {
+      console.error('Error in downloadFile:', error);
       setError(`Error downloading file: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
+  // Add column width drag handling function
+  const handleColumnResizeStart = (e: React.MouseEvent, columnIndex: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!tableRef.current) return;
+    
+    const headerCells = tableRef.current.querySelectorAll('thead th');
+    const columnElement = headerCells[columnIndex + 1]; // +1 for the # column
+    
+    if (columnElement) {
+      setIsResizing(true);
+      setCurrentResizingColumn(columnIndex);
+      setStartX(e.clientX);
+      
+      // Get current column width
+      const currentWidth = columnElement.getBoundingClientRect().width;
+      setStartWidth(currentWidth);
+      
+      // Add global mouse move and up event listeners
+      document.addEventListener('mousemove', handleColumnResizeMove);
+      document.addEventListener('mouseup', handleColumnResizeEnd);
+    }
+  };
+  
+  const handleColumnResizeMove = (e: MouseEvent) => {
+    if (!isResizing || currentResizingColumn === null) return;
+    
+    const deltaX = e.clientX - startX;
+    const newWidth = Math.max(100, startWidth + deltaX);
+    
+    setColumnWidths(prevWidths => ({
+      ...prevWidths,
+      [currentResizingColumn]: newWidth
+    }));
+  };
+  
+  const handleColumnResizeEnd = () => {
+    setIsResizing(false);
+    setCurrentResizingColumn(null);
+    
+    // Remove global event listeners
+    document.removeEventListener('mousemove', handleColumnResizeMove);
+    document.removeEventListener('mouseup', handleColumnResizeEnd);
+  };
+  
+  // Cleanup function
+  useEffect(() => {
+    return () => {
+      document.removeEventListener('mousemove', handleColumnResizeMove);
+      document.removeEventListener('mouseup', handleColumnResizeEnd);
+    };
+  }, []);
+
+  // Add a new empty column definition
+  const addNewColumnDefinition = () => {
+    setNewColumns([...newColumns, {
+      id: uuidv4(),
+      name: '',
+      prompt: '',
+      insertAfter: undefined,
+      isProcessing: false,
+      previewData: [],
+      isPreviewApproved: false,
+    }]);
+  };
+  
+  // Remove a column definition
+  const removeColumnDefinition = (id: string) => {
+    // Ensure at least one column definition is retained
+    if (newColumns.length <= 1) return;
+    
+    setNewColumns(newColumns.filter(col => col.id !== id));
+  };
+  
+  // Update specific column's properties
+  const updateColumnProperty = (id: string, property: keyof ColumnInfo, value: string | boolean | undefined | string[]) => {
+    setNewColumns(newColumns.map(col => 
+      col.id === id ? { ...col, [property]: value } : col
+    ));
+  };
+
+  // Reset the entire state to start a new task
+  const resetState = () => {
+    // Only allow reset if not processing
+    if (isProcessing) return;
+    
+    // Reset all state variables
+    setFileData(null);
+    setNewColumns([{
+      id: uuidv4(),
+      name: '',
+      prompt: '',
+      insertAfter: undefined,
+      isProcessing: false,
+      previewData: [],
+      isPreviewApproved: false,
+    }]);
+    setError(null);
+    setSuccess(null);
+    setDragActive(false);
+    setColumnWidths({});
+    setHighlightedRow(null);
+    setGenerationProgress({
+      currentColumn: '',
+      processedRows: 0,
+      totalRows: 0,
+      percentage: 0,
+      waitingTime: 0,
+      modelInfo: 'Using Anthropic Claude 3 Haiku (2024-03-07)'
+    });
+    
+    // Clear file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    
+    toast.success('Application reset successfully');
+  };
+
   return (
-    <div className="w-full">
-      {!fileData && (
-        <div 
-          className={`border-2 border-dashed rounded-lg p-8 transition-all ease-in-out duration-300 text-center
-            ${dragActive ? 'border-[#420039] bg-[#f5e6ff]' : 'border-gray-300 hover:border-[#420039] bg-white'}`}
-          onDragEnter={handleDrag}
-          onDragLeave={handleDrag}
-          onDragOver={handleDrag}
-          onDrop={handleDrop}
-        >
-          <div className="flex flex-col items-center justify-center">
-            <div className="w-16 h-16 mb-4 text-[#420039]">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-full h-full" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-            </div>
-            <h3 className="mb-2 text-xl font-medium text-gray-900">
-              {dragActive ? 'Drop file to upload' : 'Drag file here or click to upload'}
-            </h3>
-            <p className="mb-4 text-sm text-gray-500">
-              Supports Excel (.xlsx, .xls) and CSV files
-            </p>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-6 py-2 text-white bg-[#420039] hover:bg-[#5a0050] rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2"
-            >
-              Choose File
-            </button>
-            <input
-              ref={fileInputRef}
-              onChange={handleFileSelect}
-              type="file"
-              accept=".csv,.xlsx,.xls"
-              className="hidden"
-            />
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="p-4 mb-6 text-sm text-red-700 bg-red-100 rounded-lg">
-          <div className="flex items-center">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            <span className="font-medium">Error:</span> {error}
-          </div>
-        </div>
-      )}
-
-      {success && (
-        <div className="p-4 mb-6 text-sm text-green-700 bg-green-100 rounded-lg">
-          <div className="flex items-center">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-            </svg>
-            <span className="font-medium">Success:</span> {success}
-          </div>
-        </div>
-      )}
-
-      {fileData && fileData.sheets && !fileData.selectedSheet && (
-        <div className="p-6 mb-6 bg-white rounded-lg shadow-sm border border-gray-200">
-          <h2 className="mb-4 text-xl font-bold text-[#420039]">Select Worksheet</h2>
-          <p className="mb-4 text-gray-600">Your Excel file contains multiple worksheets. Please select one to process:</p>
-          <div className="flex flex-wrap gap-2">
-            {fileData.sheets.map((sheet) => (
+    <>
+      <Toaster 
+        position="top-right"
+        toastOptions={{
+          duration: 3000,
+          style: {
+            background: '#363636',
+            color: '#fff',
+          },
+          success: {
+            duration: 3000,
+            style: {
+              background: '#16a34a',
+            },
+          },
+          error: {
+            duration: 4000,
+            style: {
+              background: '#dc2626',
+            },
+          }
+        }}
+      />
+      <div className="w-full">
+        {!fileData && (
+          <div 
+            className={`border-2 border-dashed rounded-lg p-8 transition-all ease-in-out duration-300 text-center
+              ${dragActive ? 'border-[#420039] bg-[#f5e6ff]' : 'border-gray-300 hover:border-[#420039] bg-white'}`}
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+          >
+            <div className="flex flex-col items-center justify-center">
+              <div className="w-16 h-16 mb-4 text-[#420039]">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-full h-full" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+              </div>
+              <h3 className="mb-2 text-xl font-medium text-gray-900">
+                {dragActive ? 'Drop file to upload' : 'Drag file here or click to upload'}
+              </h3>
+              <p className="mb-4 text-sm text-gray-500">
+                Supports Excel (.xlsx, .xls) and CSV files
+              </p>
               <button
-                key={sheet}
-                onClick={() => handleSheetSelect(sheet)}
-                className="px-4 py-2 text-white bg-[#420039] hover:bg-[#5a0050] rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-6 py-2 text-white bg-[#420039] hover:bg-[#5a0050] rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2"
               >
-                {sheet}
+                Choose File
               </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {fileData && fileData.headers.length > 0 && (
-        <>
-          <div className="p-6 mb-6 bg-white rounded-lg shadow-sm border border-gray-200">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-[#420039]">File Preview</h2>
-              <span className="px-3 py-1 text-xs text-[#420039] bg-[#f5e6ff] rounded-full">
-                {fileData.fileName}
-              </span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left border-collapse">
-                <thead className="text-xs text-gray-700 uppercase bg-gray-50">
-                  <tr>
-                    {fileData.headers.map((header, index) => (
-                      <th 
-                        key={index} 
-                        className="px-4 py-3 whitespace-normal font-semibold" 
-                        style={{ minWidth: "100px" }}
-                        title={header}
-                      >
-                        {intelligentTruncate(header, 20)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {fileData.data.slice(0, 5).map((row, rowIndex) => (
-                    <tr key={rowIndex} className="bg-white hover:bg-gray-50">
-                      {row.map((cell, cellIndex) => (
-                        <td 
-                          key={cellIndex} 
-                          className="px-4 py-3 font-medium text-gray-900 whitespace-normal break-words group relative"
-                          style={{ minWidth: "100px" }}
-                          title=""
-                        >
-                          {(!isNaN(Number(String(cell))) || String(cell).length < 12) ? 
-                            String(cell) : 
-                            <span>{intelligentTruncate(String(cell), 30)}</span>
-                          }
-                          {String(cell).length > 12 && (
-                            <div className="absolute z-20 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-sm rounded-md p-3 transform -translate-x-1/2 translate-y-2 bottom-full left-1/2 w-auto min-w-[200px] max-w-sm shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px]">
-                              {String(cell)}
-                            </div>
-                          )}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-4 text-sm text-gray-500">
-              Showing {Math.min(5, fileData.data.length)} of {fileData.data.length} rows
+              <input
+                ref={fileInputRef}
+                onChange={handleFileSelect}
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
+              />
             </div>
           </div>
+        )}
 
+        {error && (
+          <div className="p-4 mb-6 text-sm text-red-700 bg-red-100 rounded-lg">
+            <div className="flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <span className="font-medium">Error:</span> {error}
+            </div>
+          </div>
+        )}
+
+        {success && (
+          <div className="p-4 mb-6 text-sm text-green-700 bg-green-100 rounded-lg">
+            <div className="flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              <span className="font-medium">Success:</span> {success}
+            </div>
+          </div>
+        )}
+
+        {fileData && fileData.sheets && !fileData.selectedSheet && (
           <div className="p-6 mb-6 bg-white rounded-lg shadow-sm border border-gray-200">
-            <h2 className="mb-4 text-xl font-bold text-[#420039]">Add New Column</h2>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label className="block mb-2 text-sm font-medium text-gray-700">
-                  Column Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="Enter column name"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:border-[#420039] text-gray-900 placeholder-gray-500"
-                  value={newColumn.name}
-                  onChange={(e) => setNewColumn({ ...newColumn, name: e.target.value })}
-                />
+            <h2 className="mb-4 text-xl font-bold text-[#420039]">Select Worksheet</h2>
+            <p className="mb-4 text-gray-600">Your Excel file contains multiple worksheets. Please select one to process:</p>
+            <div className="flex flex-wrap gap-2">
+              {fileData.sheets.map((sheet) => (
+                <button
+                  key={sheet}
+                  onClick={() => handleSheetSelect(sheet)}
+                  className="px-4 py-2 text-white bg-[#420039] hover:bg-[#5a0050] rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2"
+                >
+                  {sheet}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {fileData && fileData.headers.length > 0 && (
+          <>
+            {/* New compact file information and operation panel */}
+            <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 bg-blue-100 rounded-md">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="font-medium text-gray-900">{fileData.fileName}</div>
+                    <div className="text-xs text-gray-500">{fileData.data.length} rows, {fileData.headers.length} columns</div>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button 
+                    className={`px-4 py-2 text-white bg-gray-600 hover:bg-gray-700 rounded-md flex items-center transition-all duration-300 ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    onClick={resetState}
+                    disabled={isProcessing}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Reset
+                  </button>
+                  <button 
+                    className={`px-4 py-2 text-white rounded-md flex items-center transition-all duration-300 ${success && success.includes('ready to download') 
+                      ? 'bg-green-600 hover:bg-green-700 shadow-md animate-pulse' 
+                      : 'bg-blue-600 hover:bg-blue-700'}`}
+                    onClick={downloadFile}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    {success && success.includes('ready to download') 
+                      ? `Download Now (as ${fileData.fileName.split('.').pop()?.toUpperCase()})` 
+                      : 'Download'}
+                  </button>
+                </div>
               </div>
               
-              <div>
-                <label className="block mb-2 text-sm font-medium text-gray-700">
-                  Insert After (Optional)
-                </label>
-                <select
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:border-[#420039] text-gray-900"
-                  value={newColumn.insertAfter || ''}
-                  onChange={(e) => setNewColumn({ ...newColumn, insertAfter: e.target.value || undefined })}
-                >
-                  <option value="">Add to the end</option>
-                  {fileData.headers.map((header) => (
-                    <option key={header} value={header}>
-                      After: {intelligentTruncate(header, 30)}
-                    </option>
-                  ))}
-                </select>
+              {/* Add new column - multi-column support */}
+              <div className="px-4 py-3">
+                {/* Warning message when processing - only display during processing */}
+                {isProcessing && (
+                  <div className="p-3 mb-4 text-sm bg-amber-100 text-amber-800 rounded-lg border border-amber-200 shadow-sm">
+                    <div className="flex items-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-amber-600" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <span className="font-bold text-amber-800">Warning:</span>
+                      <span className="ml-1">Do not close or refresh this page while processing! Your task will be terminated and all progress will be lost.</span>
+                    </div>
+                  </div>
+                )}
+                
+                <div className="mb-2 text-sm font-medium text-gray-700 flex items-center justify-between">
+                  <span>Add New Columns</span>
+                  <button
+                    className="px-2 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded-md"
+                    onClick={addNewColumnDefinition}
+                  >
+                    + Add Another Column
+                  </button>
+                </div>
+                
+                {/* List all column definitions */}
+                {newColumns.map((column, index) => (
+                  <div key={column.id} className="mb-4 p-3 border border-gray-200 rounded-md bg-white">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="bg-blue-100 px-3 py-1.5 rounded-md text-sm font-medium text-blue-700 w-full">
+                        Column #{index + 1}
+                      </div>
+                      {newColumns.length > 1 && (
+                        <button
+                          className="text-red-500 hover:text-red-700 ml-2"
+                          onClick={() => removeColumnDefinition(column.id)}
+                          aria-label="Remove column"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-3 mb-2">
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Column Name:</label>
+                        <input
+                          type="text"
+                          placeholder="Enter name"
+                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#420039] focus:border-[#420039] text-gray-900"
+                          value={column.name}
+                          onChange={(e) => updateColumnProperty(column.id, 'name', e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Insert After:</label>
+                        <select
+                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#420039] focus:border-[#420039] text-gray-900"
+                          value={column.insertAfter || ''}
+                          onChange={(e) => updateColumnProperty(column.id, 'insertAfter', e.target.value || undefined)}
+                        >
+                          <option value="">Add to the end</option>
+                          {fileData.headers.map((header) => (
+                            <option key={header} value={header}>
+                              After: {intelligentTruncate(header, 20)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-end">
+                        {column.isProcessing && (
+                          <div className="bg-gray-100 rounded-md px-2 py-1 w-full text-xs text-gray-500 flex items-center justify-center">
+                            <svg className="w-3 h-3 mr-1 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Processing...
+                          </div>
+                        )}
+                        {!column.isProcessing && column.previewData.length > 0 && (
+                          <div className="bg-green-100 rounded-md px-2 py-1 w-full text-xs text-green-700 flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                            Preview Ready
+                          </div>
+                        )}
+                        {!column.isProcessing && column.previewData.length === 0 && (
+                          <div className="bg-gray-100 rounded-md px-2 py-1 w-full text-xs text-gray-500 flex items-center justify-center">
+                            No Preview
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="relative">
+                      <textarea
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#420039] focus:border-[#420039] min-h-[60px] text-gray-900 placeholder-gray-600"
+                        placeholder="Describe what you want the AI to generate based on other columns..."
+                        value={column.prompt}
+                        onChange={(e) => updateColumnProperty(column.id, 'prompt', e.target.value)}
+                      />
+                    </div>
+                    
+                    {/* Preview data (only display columns with preview data) */}
+                    {column.previewData.length > 0 && (
+                      <div className="mt-2">
+                        <div className="text-xs font-medium text-gray-700 mb-1">Preview Data:</div>
+                        <div className="max-h-32 overflow-y-auto border border-gray-200 rounded p-2 bg-white">
+                          {column.previewData.map((content, idx) => (
+                            <div key={idx} className={`text-xs py-1 px-2 ${idx % 2 === 0 ? 'bg-gray-50' : 'bg-white'}`}>
+                              <span className="font-medium text-gray-700 mr-1">Row {idx + 1}:</span> 
+                              <span className="text-gray-900">{content.length < 50 ? content : `${content.substring(0, 50)}...`}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                
+                {/* Add unified preview button and generate all columns button */}
+                <div className="mt-4 flex flex-col space-y-3">
+                  {/* Progress bar - only show when processing */}
+                  {isProcessing && (
+                    <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+                      <div 
+                        className="bg-green-600 h-4 text-xs font-medium text-white text-center p-0.5 leading-none rounded-full"
+                        style={{ width: `${generationProgress.percentage}%` }}
+                      >
+                        {generationProgress.percentage}%
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* More detailed progress information */}
+                  {isProcessing && generationProgress.currentColumn && (
+                    <div className="text-xs text-gray-700 bg-gray-100 p-2 rounded-md">
+                      <div className="font-medium">Generating column: {generationProgress.currentColumn}</div>
+                      <div className="mt-1 flex justify-between">
+                        <span>Processed: {generationProgress.processedRows}/{generationProgress.totalRows} rows</span>
+                        <span>Completed: {generationProgress.percentage}%</span>
+                      </div>
+                      {/* Add model info display */}
+                      <div className="mt-1 flex items-center">
+                        <span className="mr-2">AI model:</span>
+                        <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-800 font-medium">
+                          {generationProgress.modelInfo}
+                        </span>
+                      </div>
+                      {generationProgress.waitingTime > 0 && (
+                        <div className="mt-1">
+                          Waiting {generationProgress.waitingTime} seconds for next API call...
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  <div className="flex justify-end space-x-3">
+                    <button
+                      className={`px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${newColumns.some(col => col.isProcessing) ? 'opacity-75 cursor-wait' : ''}`}
+                      onClick={() => generatePreviewData()}
+                      disabled={isProcessing || newColumns.some(col => col.isProcessing) || !newColumns.some(col => col.name && col.prompt)}
+                    >
+                      {newColumns.some(col => col.isProcessing) ? (
+                        <span className="flex items-center">
+                          <svg className="w-4 h-4 mr-2 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Generating Previews...
+                        </span>
+                      ) : "Generate All Previews"}
+                    </button>
+                    <button
+                      className={`px-4 py-2 text-white bg-[#420039] hover:bg-[#5a0050] rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${isProcessing ? 'opacity-75 cursor-wait' : ''}`}
+                      onClick={generateFullData}
+                      disabled={isProcessing || !newColumns.some(col => col.name && col.previewData.length > 0)}
+                    >
+                      {isProcessing ? (
+                        <span className="flex items-center">
+                          <svg className="w-4 h-4 mr-2 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Processing...
+                        </span>
+                      ) : "Generate All Columns"}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
             
-            <div className="mt-4">
-              <label className="block mb-2 text-sm font-medium text-gray-700">
-                AI Prompt
-              </label>
-              <textarea
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:border-[#420039] min-h-[120px] text-gray-900 placeholder-gray-500"
-                placeholder="Describe what you want the AI to generate based on other columns"
-                value={newColumn.prompt}
-                onChange={(e) => setNewColumn({ ...newColumn, prompt: e.target.value })}
-              />
-              <p className="mt-1 text-sm text-gray-500">
-                Example: &quot;Generate a summary based on the &apos;Description&apos; column&quot; or &quot;Analyze sentiment in the &apos;Comments&apos; column&quot;
-              </p>
-            </div>
-            
-            <div className="mt-6">
-              <button
-                className={`px-6 py-2 text-white bg-[#420039] hover:bg-[#5a0050] rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${newColumn.isProcessing ? 'opacity-75 cursor-wait' : ''}`}
-                onClick={generatePreviewData}
-                disabled={!newColumn.name || !newColumn.prompt || newColumn.isProcessing}
-              >
-                {newColumn.isProcessing ? (
-                  <span className="flex items-center">
-                    <svg className="w-5 h-5 mr-2 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Generating...
-                  </span>
-                ) : "Generate Preview"}
-              </button>
-            </div>
-          </div>
-
-          {newColumn.previewData.length > 0 && (
             <div className="p-6 mb-6 bg-white rounded-lg shadow-sm border border-gray-200">
-              <h2 className="mb-4 text-xl font-bold text-[#420039]">Preview Generated Data</h2>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left border-collapse">
-                  <thead className="text-xs text-gray-700 uppercase bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-3 w-16">Row</th>
-                      <th className="px-4 py-3 w-2/3">Generated Content</th>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-[#420039]">File Preview</h2>
+                <span className="px-3 py-1 text-xs text-[#420039] bg-[#f5e6ff] rounded-full">
+                  {fileData.fileName}
+                </span>
+              </div>
+              <div className="overflow-x-auto overflow-y-auto max-h-[480px] border border-gray-200 rounded shadow-inner">
+                <table ref={tableRef} className="w-full text-sm text-left border-collapse border-spacing-0 border border-gray-200">
+                  <thead className="sticky top-0 z-20">
+                    <tr className="bg-gray-100 border-b-2 border-gray-300">
+                      <th className="px-2 py-1.5 font-semibold text-gray-700 border border-gray-200 w-10 text-center bg-gray-100">
+                        <div className="flex items-center justify-center">
+                          #
+                          <span className="ml-1 text-gray-400">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4" />
+                            </svg>
+                          </span>
+                        </div>
+                      </th>
+                      {fileData.headers.map((header, index) => (
+                        <th 
+                          key={index} 
+                          className="px-3 py-1.5 font-semibold text-gray-700 border border-gray-200 relative bg-gray-100"
+                          style={{ 
+                            minWidth: "100px",
+                            width: columnWidths[index] ? `${columnWidths[index]}px` : undefined
+                          }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center">
+                              <span>{intelligentTruncate(header, 20)}</span>
+                              <span className="ml-1 text-gray-400">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4" />
+                                </svg>
+                              </span>
+                            </div>
+                            {/* Drag handle */}
+                            <div
+                              className="absolute top-0 right-0 h-full w-5 cursor-col-resize z-10"
+                              onMouseDown={(e) => handleColumnResizeStart(e, index)}
+                            >
+                              <div className="h-full w-0 mx-auto"></div>
+                            </div>
+                          </div>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {newColumn.previewData.map((content, index) => (
-                      <tr key={index} className="bg-white hover:bg-gray-50">
-                        <td className="px-4 py-3 font-medium text-gray-900">
-                          {index + 1}
+                  <tbody>
+                    {fileData.data.slice(0, 100).map((row, rowIndex) => (
+                      <tr 
+                        key={rowIndex} 
+                        className={`
+                          ${highlightedRow === rowIndex ? 'bg-yellow-100' : rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'} 
+                          hover:bg-blue-50
+                        `}
+                        onClick={() => setHighlightedRow(rowIndex === highlightedRow ? null : rowIndex)}
+                      >
+                        <td className="px-2 py-1.5 text-center text-gray-500 text-xs border border-gray-200">
+                          {rowIndex + 1}
                         </td>
-                        <td 
-                          className="px-4 py-3 text-gray-900 whitespace-normal break-words group relative"
-                          style={{ maxWidth: "400px" }}
-                          title=""
-                        >
-                          {content.length < 50 ? 
-                            content : 
-                            <span>{intelligentTruncate(content, 50)}</span>
-                          }
-                          {content.length > 50 && (
-                            <div className="absolute z-20 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-sm rounded-md p-3 transform -translate-x-1/2 translate-y-2 bottom-full left-1/2 w-auto min-w-[200px] max-w-md shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px]">
-                              {content}
-                            </div>
-                          )}
-                        </td>
+                        {row.map((cell, cellIndex) => {
+                          const cellValue = String(cell);
+                          const isNumeric = !isNaN(Number(cellValue)) && cellValue !== '';
+                          
+                          return (
+                            <td 
+                              key={cellIndex} 
+                              className={`px-3 py-1.5 border border-gray-200 group relative ${isNumeric ? 'text-right' : ''}`}
+                            >
+                              <div className="font-normal text-gray-900 whitespace-normal break-words">
+                                {(!isNaN(Number(cellValue)) || cellValue.length < 12) ? 
+                                  cellValue : 
+                                  <span>{intelligentTruncate(cellValue, 30)}</span>
+                                }
+                              </div>
+                              {cellValue.length > 12 && (
+                                <div className="fixed z-40 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-sm"
+                                  style={{
+                                    left: '50%',
+                                    transform: 'translateX(-50%)',
+                                    bottom: 'calc(100% + 10px)',
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    // Get element position information
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    // If tooltip's top is out of view, show below cell
+                                    if (rect.top < 10) {
+                                      e.currentTarget.style.bottom = 'auto';
+                                      e.currentTarget.style.top = 'calc(100% + 10px)';
+                                    }
+                                    // If tooltip's left or right is out of view, adjust horizontal position
+                                    if (rect.left < 10) {
+                                      e.currentTarget.style.left = '10px';
+                                      e.currentTarget.style.transform = 'none';
+                                    } else if (rect.right > window.innerWidth - 10) {
+                                      e.currentTarget.style.left = 'auto';
+                                      e.currentTarget.style.right = '10px';
+                                      e.currentTarget.style.transform = 'none';
+                                    }
+                                  }}
+                                >
+                                  {cellValue}
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              
-              <div className="flex justify-end gap-4 mt-6">
-                <button
-                  className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2"
-                  onClick={() => setNewColumn({ ...newColumn, previewData: [] })}
-                >
-                  Cancel
-                </button>
-                <button
-                  className={`px-6 py-2 text-white bg-[#420039] hover:bg-[#5a0050] rounded-md focus:outline-none focus:ring-2 focus:ring-[#420039] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${isProcessing ? 'opacity-75 cursor-wait' : ''}`}
-                  onClick={generateFullData}
-                  disabled={isProcessing}
-                >
-                  {isProcessing ? (
-                    <span className="flex items-center">
-                      <svg className="w-5 h-5 mr-2 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Processing...
-                    </span>
-                  ) : "Approve & Generate All"}
-                </button>
+              <div className="mt-4 text-sm text-gray-500 flex justify-between items-center">
+                <span>Showing {Math.min(100, fileData.data.length)} of {fileData.data.length} rows</span>
+                {fileData.data.length > 20 && (
+                  <span className="text-blue-600 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                    </svg>
+                    Scroll to view more rows
+                  </span>
+                )}
               </div>
             </div>
-          )}
-
-          {fileData.headers.length > 0 && fileData.data.length > 0 && (
-            <div className="text-center">
-              <button 
-                className="px-8 py-3 text-[#420039] bg-[#ffbc00] hover:bg-[#ffa700] rounded-md focus:outline-none focus:ring-2 focus:ring-[#ffbc00] focus:ring-offset-2 shadow-sm font-bold"
-                onClick={downloadFile}
-              >
-                <span className="flex items-center justify-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                  Download Enhanced File
-                </span>
-              </button>
-            </div>
-          )}
-        </>
-      )}
-    </div>
+          </>
+        )}
+      </div>
+    </>
   );
 } 

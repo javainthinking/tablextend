@@ -1,67 +1,69 @@
 import FileUploaderWrapper from '../components/FileUploaderWrapper'
+import Image from 'next/image'
 
 export default function Home() {
   return (
     <main className="min-h-screen bg-white">
-      {/* Header */}
-      <header className="bg-[#420039] shadow-md">
-        <div className="container mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="bg-white rounded-full p-2">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-[#420039]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="container mx-auto px-6 py-16">
+        {/* Logo and Title Section */}
+        <div className="flex flex-col items-center justify-center">
+          <div className="flex items-center mb-8">
+            <div className="bg-[#420039] rounded-full p-3 mr-3 shadow-md">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
             </div>
-            <h1 className="text-2xl font-bold text-white">Tablextend</h1>
+            <h1 className="text-3xl font-bold text-[#420039]">Tablextend</h1>
           </div>
-          <div className="flex space-x-6">
-            <a href="#pricing" className="text-sm text-white/90 hover:text-white">Pricing</a>
-            <a href="#templates" className="text-sm text-white/90 hover:text-white">Templates</a>
-            <a href="#community" className="text-sm text-white/90 hover:text-white">Community</a>
-            <a href="#resources" className="text-sm text-white/90 hover:text-white">Resources</a>
-            <a href="https://github.com" target="_blank" rel="noopener noreferrer" className="text-sm text-white/90 hover:text-white">GitHub</a>
-          </div>
-          <div className="flex items-center space-x-4">
-            <a href="#signin" className="text-sm text-white hover:text-white/80">Sign in</a>
-            <a href="#signup" className="bg-[#ffbc00] hover:bg-[#ffa700] text-[#420039] font-semibold px-4 py-2 rounded-md text-sm">Sign up for free</a>
-          </div>
-        </div>
-      </header>
-
-      <div className="container mx-auto px-6 py-12">
-        {/* Hero section */}
-        <div className="text-center mb-16">
-          <h1 className="text-4xl md:text-5xl font-bold text-[#420039] mb-4">
+          
+          {/* Hero Content */}
+          <h2 className="text-4xl md:text-5xl font-bold text-[#420039] mb-5 text-center">
             Enrich Your Table with AI
-          </h1>
-          <p className="text-xl text-gray-600 max-w-3xl mx-auto mb-8">
+          </h2>
+          <p className="text-xl text-gray-600 max-w-2xl mx-auto mb-16 text-center">
             Add new data into your table with AI – without scripts or code.
           </p>
-          <div className="flex justify-center space-x-4">
-            <button className="bg-[#ffbc00] hover:bg-[#ffa700] text-[#420039] font-bold px-6 py-3 rounded-md text-base shadow-sm">
-              Get Started
-            </button>
-            <button className="border border-gray-300 text-gray-700 px-6 py-3 rounded-md text-base flex items-center hover:bg-gray-50">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+        </div>
+
+        {/* File Size Notice */}
+        <div className="text-center mb-6">
+          <div className="inline-flex flex-col items-center bg-blue-50 text-blue-800 px-5 py-3 rounded-lg">
+            <div className="flex items-center mb-1">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              Watch demo
-            </button>
+              <span className="text-sm font-medium">Maximum file size is 5MB</span>
+            </div>
+            <div className="text-sm flex items-center justify-center mt-1">
+              For files larger than 5MB (up to 1GB), please use{" "}
+              <a 
+                href="https://powerdrill.ai/" 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="font-semibold hover:underline flex items-center ml-1"
+              >
+                <Image 
+                  src="/powerdrill_logo_color.png" 
+                  alt="powerdrill.ai logo" 
+                  width={100} 
+                  height={40} 
+                  className="inline-block"
+                />
+                <span className="ml-2 text-[#420039]">powerdrill.ai</span>
+              </a>
+            </div>
           </div>
         </div>
 
         {/* File Uploader */}
-        <div className="bg-white rounded-xl p-8 shadow-sm border border-gray-200 mb-16">
-          <h2 className="text-2xl font-bold text-[#420039] mb-6 text-center">
-            Upload Your Data
-          </h2>
+        <div className="bg-white rounded-xl p-8 shadow-sm border border-gray-200 mb-20">
           <FileUploaderWrapper />
         </div>
       </div>
 
       {/* Footer */}
-      <footer className="bg-gray-50 border-t border-gray-200 mt-20">
-        <div className="container mx-auto px-6 py-8">
+      <footer className="border-t border-gray-200 mt-12">
+        <div className="container mx-auto px-6 py-6">
           <div className="text-center text-gray-500 text-sm">
             <p>© 2025 Tablextend. All rights reserved.</p>
           </div>

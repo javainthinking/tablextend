@@ -41,13 +41,13 @@ Create a `.env` file based on the `.env.example`:
 cp .env.example .env
 ```
 
-Then edit the `.env` file to add your OpenAI API key:
+Then edit the `.env` file to add your Anthropic API key:
 
 ```
-OPENAI_API_KEY=your_openai_api_key_here
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ```
 
-You can get an API key from [OpenAI's platform](https://platform.openai.com/api-keys).
+You can get an API key from [Anthropic's platform](https://console.anthropic.com/).
 
 ### Development
 
