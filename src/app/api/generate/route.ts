@@ -71,16 +71,86 @@ Ensure the output is valid JSON and each record's answer is an independent strin
 
               if (jsonStart >= 0 && jsonEnd > jsonStart) {
                 const jsonString = generatedContent.substring(jsonStart, jsonEnd);
-                const parsedResults = JSON.parse(jsonString);
+                try {
+                  const parsedResults = JSON.parse(jsonString);
 
-                if (Array.isArray(parsedResults)) {
-                  batchResults = parsedResults;
-                  // Ensure the number of results matches the input count
-                  if (batchResults.length < batchData.length) {
-                    batchResults = [...batchResults, ...Array(batchData.length - batchResults.length).fill('Failed to generate content')];
-                  } else if (batchResults.length > batchData.length) {
-                    batchResults = batchResults.slice(0, batchData.length);
+                  if (Array.isArray(parsedResults)) {
+                    batchResults = parsedResults;
+                    // Ensure the number of results matches the input count
+                    if (batchResults.length < batchData.length) {
+                      batchResults = [...batchResults, ...Array(batchData.length - batchResults.length).fill('Failed to generate content')];
+                    } else if (batchResults.length > batchData.length) {
+                      batchResults = batchResults.slice(0, batchData.length);
+                    }
+                  } else {
+                    // 如果解析出的不是数组，记录错误并填充默认响应
+                    console.error('Parsed result is not an array:', parsedResults);
+                    batchResults = Array(batchData.length).fill('Invalid response format from AI');
                   }
+                } catch (jsonError) {
+                  // 如果JSON解析失败，尝试进行清理并再次解析
+                  console.error('Initial JSON parse error:', jsonError);
+
+                  // 尝试进行多种JSON修复策略
+                  try {
+                    // 策略1: 尝试从文本中提取看起来像JSON数组的部分
+                    const regex = /\[\s*".*"\s*(,\s*".*"\s*)*\]/;
+                    const match = generatedContent.match(regex);
+                    if (match && match[0]) {
+                      const cleanedJson = match[0];
+                      const parsedResults = JSON.parse(cleanedJson);
+                      if (Array.isArray(parsedResults)) {
+                        console.log('Successfully parsed using regex extraction');
+                        batchResults = parsedResults;
+                      }
+                    } else {
+                      // 策略2: 分行解析并手动构建数组
+                      console.log('Attempting line-by-line extraction...');
+                      const lines = generatedContent.split('\n');
+                      batchResults = [];
+
+                      for (const line of lines) {
+                        // 查找引号包围的文本
+                        const matchQuoted = line.match(/"([^"]*)"/);
+                        if (matchQuoted && matchQuoted[1]) {
+                          batchResults.push(matchQuoted[1]);
+                        }
+                      }
+
+                      if (batchResults.length === 0) {
+                        // 如果上述方法失败，回退到简单的分割方法
+                        batchResults = generatedContent
+                          .replace(/\[|\]|"/g, '') // 移除所有括号和引号
+                          .split(',')               // 按逗号分割
+                          .map(s => s.trim())      // 修剪空白
+                          .filter(s => s.length > 0); // 过滤空条目
+                      }
+                    }
+                  } catch (fallbackError) {
+                    console.error('All JSON parsing attempts failed:', fallbackError);
+                    batchResults = Array(batchData.length).fill('Failed to parse response format');
+                  }
+                }
+              } else {
+                // 找不到JSON数组的边界，尝试从文本中提取有用信息
+                console.log('Could not find JSON array boundaries, extracting content directly');
+
+                // 分割内容并提取有用信息
+                const lines = generatedContent.split('\n');
+                batchResults = [];
+
+                for (let i = 0; i < lines.length; i++) {
+                  const line = lines[i].trim();
+                  if (line && line.includes(':') && !line.startsWith('Record')) {
+                    const contentAfterColon = line.substring(line.indexOf(':') + 1).trim();
+                    batchResults.push(contentAfterColon);
+                  }
+                }
+
+                // If still no results, use the entire text content
+                if (batchResults.length === 0) {
+                  const paragraphs = generatedContent.split('\n\n');
+                  batchResults = paragraphs.filter(p => p.trim().length > 0);
                 }
               }
             } catch (parseError) {
