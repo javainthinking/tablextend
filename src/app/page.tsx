@@ -14,6 +14,11 @@ export default function Home() {
               </svg>
             </div>
             <h1 className="text-4xl font-bold logo-text">TableXtend</h1>
+            <div className="ml-4 transform rotate-6 animate-pulse-slow">
+              <div className="bg-gradient-to-r from-[#ff5e62] to-[#ff9966] text-white px-3 py-1 rounded-lg font-bold shadow-lg border-2 border-white text-sm">
+                FREE
+              </div>
+            </div>
           </div>
 
           {/* Hero Content with Gradient Text */}

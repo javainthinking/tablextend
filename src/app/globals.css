@@ -52,3 +52,19 @@ body {
   background: linear-gradient(to bottom right, #3a0033, #620052);
   box-shadow: 0 4px 6px -1px rgba(98, 0, 82, 0.2), 0 2px 4px -1px rgba(98, 0, 82, 0.1);
 }
+
+@keyframes pulse-slow {
+  0% {
+    transform: scale(1) rotate(6deg);
+  }
+  50% {
+    transform: scale(1.1) rotate(6deg);
+  }
+  100% {
+    transform: scale(1) rotate(6deg);
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s infinite ease-in-out;
+}

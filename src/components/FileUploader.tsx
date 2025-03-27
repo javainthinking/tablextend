@@ -66,6 +66,14 @@ export default function FileUploader() {
   // Add highlighted row functionality
   const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
 
+  // Add tooltip tracking states
+  const [activeTooltip, setActiveTooltip] = useState<{
+    type: 'preview' | 'filecell';
+    columnId?: string;
+    rowIndex: number;
+    columnIndex?: number;
+  } | null>(null);
+
   // Add progress tracking state
   const [generationProgress, setGenerationProgress] = useState<{
     currentColumn: string;
@@ -224,7 +232,7 @@ export default function FileUploader() {
     const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
     if (file.size > MAX_FILE_SIZE) {
       setError(<>File size ({(file.size / (1024 * 1024)).toFixed(2)}MB) exceeds the maximum limit of 5MB. Please use&nbsp;<a href="https://powerdrill.ai" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">powerdrill.ai</a>&nbsp;for larger files.</>);
-      toast.error(`File size exceeds the 5MB limit`);
+      toast.error(`文件大小超过5MB限制`);
       return;
     }
 
@@ -236,7 +244,7 @@ export default function FileUploader() {
     } else if (['xlsx', 'xls'].includes(fileExtension || '')) {
       handleExcelFile(file);
     } else {
-      setError('Unsupported file format. Please upload a CSV or Excel file.');
+      setError('不支持的文件格式。请上传CSV或Excel文件。');
     }
   };
 
@@ -263,7 +271,7 @@ export default function FileUploader() {
       header: false,
       skipEmptyLines: true,
       error: (error) => {
-        setError(`Error parsing CSV file: ${error.message}`);
+        setError(`无法解析CSV文件：${error.message}`);
       },
     });
   };
@@ -316,12 +324,12 @@ export default function FileUploader() {
           });
         }
       } catch (error) {
-        setError(`Error parsing Excel file: ${error instanceof Error ? error.message : String(error)}`);
+        setError(`解析Excel文件错误: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
 
     reader.onerror = () => {
-      setError('Error reading the file. Please try again.');
+      setError('读取文件时出错。请重试。');
     };
 
     reader.readAsArrayBuffer(file);
@@ -333,7 +341,7 @@ export default function FileUploader() {
     try {
       // Use the stored raw data instead of reading the file again
       if (!fileData.rawData) {
-        setError('File data not available. Please upload the file again.');
+        setError('文件数据不可用。请重新上传文件。');
         return;
       }
 
@@ -358,20 +366,20 @@ export default function FileUploader() {
 
           setSuccess(`Sheet "${sheetName}" selected successfully!`);
         } else {
-          setError(`Selected sheet "${sheetName}" is empty or invalid.`);
+          setError(`选择的表格"${sheetName}"为空或无效。`);
         }
       } catch (error) {
-        setError(`Error parsing sheet "${sheetName}": ${error instanceof Error ? error.message : String(error)}`);
+        setError(`解析表格"${sheetName}"错误: ${error instanceof Error ? error.message : String(error)}`);
       }
     } catch (error) {
-      setError(`Error selecting sheet: ${error instanceof Error ? error.message : String(error)}`);
+      setError(`选择表格错误: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
   // Updated function, supporting multi-column or single-column preview generation - batch processing version
   const generatePreviewData = async (columnId?: string) => {
     if (!fileData) {
-      setError('Please upload a file first.');
+      setError('请先上传文件。');
       return;
     }
 
@@ -381,7 +389,7 @@ export default function FileUploader() {
       : newColumns.filter(col => col.name && col.prompt);
 
     if (columnsToProcess.length === 0) {
-      setError('Please provide column name and prompt before generating preview.');
+      setError('请在生成预览前提供列名和提示。');
       return;
     }
 
@@ -429,9 +437,9 @@ export default function FileUploader() {
 
               if (!result.ok) {
                 if (result.status === 504) {
-                  throw new Error('Gateway Timeout (504): Server took too long to respond');
+                  throw new Error('网关超时 (504): 服务器响应时间过长');
                 }
-                throw new Error(`API error: ${result.status} ${result.statusText}`);
+                throw new Error(`API错误: ${result.status} ${result.statusText}`);
               }
 
               return await result.json();
@@ -448,7 +456,7 @@ export default function FileUploader() {
             // Parse the batch results
             const previewData = Array.isArray(response.batchResults)
               ? response.batchResults
-              : Array(5).fill('Error: Failed to generate batch preview');
+              : Array(5).fill('错误: 无法生成预览数据');
 
             return {
               id: column.id,
@@ -467,8 +475,8 @@ export default function FileUploader() {
 
             // Create a user-friendly error message
             const userErrorMessage = isTimeout
-              ? 'The server timed out. All retries failed. Please try again later or use a smaller dataset.'
-              : `Error generating preview: ${errorMessage}`;
+              ? '服务器超时。多次重试后仍未能生成内容。'
+              : `生成内容错误: ${errorMessage}`;
 
             return {
               id: column.id,
@@ -516,6 +524,24 @@ export default function FileUploader() {
   };
 
   const generateFullData = async () => {
+    // Check if there are more than 5 active columns to generate
+    const activeColumns = newColumns.filter(col => col.name && col.prompt);
+    if (activeColumns.length > 5) {
+      toast.error(
+        <div className="flex flex-col">
+          <span>Cannot generate more than 5 columns.</span>
+          <span className="text-sm mt-1">
+            For generating more columns, please use{" "}
+            <a href="https://powerdrill.ai" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-medium">
+              powerdrill.ai
+            </a>
+          </span>
+        </div>,
+        { duration: 5000 }
+      );
+      return;
+    }
+    
     if (!fileData || !newColumns.length || isProcessing) {
       return;
     }
@@ -613,12 +639,11 @@ export default function FileUploader() {
                   }),
                 });
 
-                // Check for HTTP errors including timeouts
                 if (!result.ok) {
                   if (result.status === 504) {
-                    throw new Error('Gateway Timeout (504): Server took too long to respond');
+                    throw new Error('网关超时 (504): 服务器响应时间过长');
                   }
-                  throw new Error(`API error: ${result.status} ${result.statusText}`);
+                  throw new Error(`API错误: ${result.status} ${result.statusText}`);
                 }
 
                 return await result.json();
@@ -637,14 +662,14 @@ export default function FileUploader() {
                 fullGeneratedData.push(...response.batchResults);
               } else if (Array.isArray(response.batchResults)) {
                 // If we have results but count doesn't match, fill in the missing ones
-                console.warn(`Batch results length mismatch: expected ${batch.length}, got ${response.batchResults.length}`);
+                console.warn(`批处理结果长度不匹配: 预期 ${batch.length}, 实际获得 ${response.batchResults.length}`);
                 const validResults = response.batchResults;
-                const fillerResults = Array(batch.length - validResults.length).fill('Error: Incomplete batch result');
+                const fillerResults = Array(batch.length - validResults.length).fill('错误: 不完整的批处理结果');
                 fullGeneratedData.push(...validResults, ...fillerResults);
               } else {
                 // If return is not an array or is invalid, add error information
-                console.error('Invalid batch results:', response);
-                fullGeneratedData.push(...Array(batch.length).fill('Error: Failed to generate batch content'));
+                console.error('无效的批处理结果:', response);
+                fullGeneratedData.push(...Array(batch.length).fill('错误: 无法生成批处理内容'));
               }
 
               // Update progress information
@@ -663,8 +688,8 @@ export default function FileUploader() {
 
               // Create user-friendly error message based on error type
               const userErrorMessage = isTimeout
-                ? 'Server timeout occurred. Unable to generate content after multiple retries.'
-                : `Error generating content: ${errorMessage}`;
+                ? '服务器超时。多次重试后仍未能生成内容。'
+                : `生成内容错误: ${errorMessage}`;
 
               // Show a toast with the error but continue processing
               toast.error(`Error in batch: ${userErrorMessage}. Continuing with remaining data.`);
@@ -853,15 +878,35 @@ export default function FileUploader() {
 
   // Add a new empty column definition
   const addNewColumnDefinition = () => {
-    setNewColumns([...newColumns, {
-      id: uuidv4(),
-      name: '',
-      prompt: '',
-      insertAfter: undefined,
-      isProcessing: false,
-      previewData: [],
-      isPreviewApproved: false,
-    }]);
+    // Check if the existing columns count is already 5 or more
+    if (newColumns.length >= 5) {
+      toast.error(
+        <div className="flex flex-col">
+          <span>Maximum limit of 5 columns reached.</span>
+          <span className="text-sm mt-1">
+            For generating more columns, please use{" "}
+            <a href="https://powerdrill.ai" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-medium">
+              powerdrill.ai
+            </a>
+          </span>
+        </div>,
+        { duration: 5000 }
+      );
+      return;
+    }
+
+    setNewColumns([
+      ...newColumns,
+      {
+        id: uuidv4(),
+        name: '',
+        prompt: '',
+        insertAfter: fileData?.headers[fileData.headers.length - 1],
+        isProcessing: false,
+        previewData: [],
+        isPreviewApproved: false,
+      }
+    ]);
   };
 
   // Remove a column definition
@@ -915,6 +960,57 @@ export default function FileUploader() {
     }
 
     toast.success('Application reset successfully');
+  };
+
+  // Add a function to handle closing tooltips when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      // Check if click is outside tooltip and tooltip trigger areas
+      const targetElement = event.target as HTMLElement;
+      if (!targetElement.closest('.tooltip-content') && !targetElement.closest('.tooltip-trigger')) {
+        setActiveTooltip(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Handle tooltip toggle for preview data
+  const togglePreviewTooltip = (columnId: string, rowIndex: number, event: React.MouseEvent) => {
+    event.stopPropagation();
+    
+    if (activeTooltip && activeTooltip.type === 'preview' && activeTooltip.columnId === columnId && activeTooltip.rowIndex === rowIndex) {
+      // If clicking the same cell, close the tooltip
+      setActiveTooltip(null);
+    } else {
+      // Otherwise, open the tooltip for this cell
+      setActiveTooltip({
+        type: 'preview',
+        columnId,
+        rowIndex,
+        columnIndex: undefined
+      });
+    }
+  };
+
+  // Handle tooltip toggle for file preview cells
+  const toggleCellTooltip = (rowIndex: number, columnIndex: number, event: React.MouseEvent) => {
+    event.stopPropagation();
+    
+    if (activeTooltip && activeTooltip.type === 'filecell' && activeTooltip.rowIndex === rowIndex && activeTooltip.columnIndex === columnIndex) {
+      // If clicking the same cell, close the tooltip
+      setActiveTooltip(null);
+    } else {
+      // Otherwise, open the tooltip for this cell
+      setActiveTooltip({
+        type: 'filecell',
+        rowIndex,
+        columnIndex
+      });
+    }
   };
 
   return (
@@ -1175,14 +1271,56 @@ export default function FileUploader() {
                       <div className="mt-2">
                         <div className="border border-gray-200 rounded p-2 bg-white w-full">
                           {column.previewData.map((content, idx) => (
-                            <div
-                              key={idx}
-                              className={`text-xs py-1 px-2 ${idx % 2 === 0 ? 'bg-gray-50' : 'bg-white'} relative group`}
-                            >
-                              <span className="font-medium text-gray-700 mr-1">Row {idx + 1}:</span>
-                              <span className="text-gray-900 inline-block truncate max-w-full" style={{ maxWidth: "calc(100% - 60px)" }}>
-                                {content}
-                              </span>
+                            <div key={idx} className={`text-xs py-1 px-2 ${idx % 2 === 0 ? 'bg-gray-50' : 'bg-white'} relative`}>
+                              <div className="flex items-center w-full tooltip-trigger cursor-pointer" onClick={(e) => togglePreviewTooltip(column.id, idx, e)}>
+                                <span className="font-medium text-gray-700 mr-1 flex-shrink-0 w-14">Row {idx + 1}:</span>
+                                <span className={`inline-block text-left w-full overflow-hidden overflow-ellipsis whitespace-nowrap ${content.includes('生成失败') || content.includes('服务器超时') || content.includes('错误') ? 'text-red-500 font-medium' : 'text-gray-900'}`}>
+                                  {content}
+                                </span>
+                                {content.includes('生成失败') && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      generatePreviewData(column.id);
+                                    }}
+                                    className="ml-2 p-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-md flex-shrink-0"
+                                    title="重试生成此行"
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                  </button>
+                                )}
+                              </div>
+                              {/* Tooltip for preview data - now controlled by click rather than hover */}
+                              <div className={`tooltip-content absolute z-50 ${activeTooltip && activeTooltip.type === 'preview' && activeTooltip.columnId === column.id && activeTooltip.rowIndex === idx ? 'visible opacity-100' : 'invisible opacity-0'} bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-[300px] left-16`} style={{top: 'auto', bottom: 'auto', transform: 'translateY(-100%)', marginTop: '-8px'}}>
+                                <div className="font-semibold text-blue-300 mb-1 border-b border-gray-600 pb-1">
+                                  <span className="mr-1 px-1.5 py-0.5 rounded bg-purple-700 text-white text-xs">AI Generated</span>
+                                  Row: {idx + 1} | Preview
+                                </div>
+                                <div className="pt-1">
+                                  {content !== null && content !== undefined && String(content).trim() !== '' ? (
+                                    content.includes('生成失败') ? (
+                                      <div>
+                                        <span className="text-red-400 font-medium">生成失败可能因为:</span>
+                                        <ul className="list-disc pl-4 mt-1 text-red-300">
+                                          <li>服务器临时响应超时</li>
+                                          <li>AI模型无法理解指令</li>
+                                          <li>数据格式或内容复杂</li>
+                                        </ul>
+                                        <div className="mt-2 text-blue-300">
+                                          建议: 尝试点击重试按钮，或修改提示使其更具体
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      String(content)
+                                    )
+                                  ) : (
+                                    <span className="italic text-gray-400">Empty content</span>
+                                  )}
+                                </div>
+                                <div className="absolute bottom-0 left-4 transform -translate-x-1/2 translate-y-1/2 rotate-45 w-2 h-2 bg-gray-800"></div>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1381,27 +1519,17 @@ export default function FileUploader() {
                           return (
                             <td
                               key={cellIndex}
-                              className={`px-3 py-1.5 border border-gray-200 group relative hover:bg-blue-50 cursor-help ${isNewColumn ? 'border-l border-r border-purple-200' : ''}`}
+                              className={`px-3 py-1.5 border border-gray-200 relative ${isNewColumn ? 'border-l border-r border-purple-200' : ''}`}
                               style={isNewColumn ? { background: 'rgba(243, 232, 255, 0.2)' } : {}}
                             >
-                              <div className={cellClassName}>
+                              <div className={`${cellClassName} tooltip-trigger cursor-pointer`} onClick={(e) => toggleCellTooltip(rowIndex, cellIndex, e)}>
                                 {(!isNaN(Number(displayValue)) && displayValue.length < 12) || displayValue === '-' ?
                                   displayValue :
                                   <span>{intelligentTruncate(displayValue, 30)}</span>
                                 }
                               </div>
-                              {/* Improved tooltip for file preview cells */}
-                              <div className="absolute z-50 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-[300px]"
-                                style={{
-                                  left: '0',
-                                  right: '0',
-                                  margin: '0 auto',
-                                  top: 'auto',
-                                  bottom: 'auto',
-                                  transform: 'translateY(-100%)',
-                                  marginTop: '-8px'
-                                }}
-                              >
+                              {/* Improved tooltip for file preview cells - now controlled by click rather than hover */}
+                              <div className={`tooltip-content absolute z-50 ${activeTooltip && activeTooltip.type === 'filecell' && activeTooltip.rowIndex === rowIndex && activeTooltip.columnIndex === cellIndex ? 'visible opacity-100' : 'invisible opacity-0'} bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-[300px]`} style={{left: '0', right: '0', margin: '0 auto', top: 'auto', bottom: 'auto', transform: 'translateY(-100%)', marginTop: '-8px'}}>
                                 <div className="font-semibold text-blue-300 mb-1 border-b border-gray-600 pb-1">
                                   {isNewColumn && (
                                     <span className="mr-1 px-1.5 py-0.5 rounded bg-purple-700 text-white text-xs">AI Generated</span>
