@@ -14,6 +14,7 @@ type FileData = {
   sheets?: string[];
   selectedSheet?: string;
   rawData?: Uint8Array;
+  originalHeaders?: string[];
 };
 
 type ColumnInfo = {
@@ -251,6 +252,7 @@ export default function FileUploader() {
             fileName: file.name,
             headers,
             data,
+            originalHeaders: headers,
           });
 
           setSuccess('CSV file uploaded successfully!');
@@ -294,6 +296,7 @@ export default function FileUploader() {
               data: rows,
               sheets,
               selectedSheet: sheets[0],
+              originalHeaders: headers,
             });
 
             setSuccess('Excel file uploaded successfully!');
@@ -309,6 +312,7 @@ export default function FileUploader() {
             data: [],
             sheets,
             rawData: data, // Store the raw file data to use when selecting sheets
+            originalHeaders: [],
           });
         }
       } catch (error) {
@@ -349,6 +353,7 @@ export default function FileUploader() {
             headers,
             data: rows,
             selectedSheet: sheetName,
+            originalHeaders: headers,
           });
 
           setSuccess(`Sheet "${sheetName}" selected successfully!`);
@@ -527,6 +532,9 @@ export default function FileUploader() {
         modelInfo: 'Anthropic Claude'
       });
 
+      // Save original headers before adding new columns
+      const originalHeaders = [...fileData.headers];
+
       // Initialize new headers and data
       const updatedHeaders = [...fileData.headers];
       let updatedData = [...fileData.data];
@@ -668,7 +676,7 @@ export default function FileUploader() {
             // Adding a short delay between batches
             if (i + batchSize < remainingRows.length) {
               setSuccess(`Generating: Column "${column.name}" | Completed batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(remainingRows.length/batchSize)} | Preparing next batch...`);
-              await delay(2000); // Wait 2 seconds between batches
+              await delay(100); // Wait 0.1 seconds between batches
             }
           }
         }
@@ -694,6 +702,7 @@ export default function FileUploader() {
         ...fileData,
         headers: updatedHeaders,
         data: updatedData,
+        originalHeaders: originalHeaders,
       });
 
       // Reset column state
@@ -1300,34 +1309,42 @@ export default function FileUploader() {
                           </span>
                         </div>
                       </th>
-                      {fileData.headers.map((header, index) => (
-                        <th
-                          key={index}
-                          className="px-3 py-1.5 font-semibold text-gray-700 border border-gray-200 relative bg-gray-100"
-                          style={{
-                            minWidth: "100px",
-                            width: columnWidths[index] ? `${columnWidths[index]}px` : undefined
-                          }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center">
-                              <span className={header.startsWith('Column_') ? 'italic text-gray-500' : ''}>{intelligentTruncate(header, 20)}</span>
-                              <span className="ml-1 text-gray-400">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4" />
-                                </svg>
-                              </span>
+                      {fileData.headers.map((header, index) => {
+                        const isNewColumn = fileData.originalHeaders && !fileData.originalHeaders.includes(header);
+                        return (
+                          <th
+                            key={index}
+                            className={`px-3 py-1.5 font-semibold text-gray-700 border border-gray-200 relative bg-gray-100 ${isNewColumn ? 'bg-gradient-to-b from-purple-50 to-gray-100 border-t-2 border-t-purple-400' : ''}`}
+                            style={{
+                              minWidth: "100px",
+                              width: columnWidths[index] ? `${columnWidths[index]}px` : undefined
+                            }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center">
+                                {isNewColumn && (
+                                  <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-purple-500"></span>
+                                )}
+                                <span className={`${header.startsWith('Column_') ? 'italic text-gray-500' : ''} ${isNewColumn ? 'text-purple-700 font-medium' : ''}`}>
+                                  {intelligentTruncate(header, 20)}
+                                </span>
+                                <span className="ml-1 text-gray-400">
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4" />
+                                  </svg>
+                                </span>
+                              </div>
+                              {/* Drag handle */}
+                              <div
+                                className="absolute top-0 right-0 h-full w-5 cursor-col-resize z-10"
+                                onMouseDown={(e) => handleColumnResizeStart(e, index)}
+                              >
+                                <div className="h-full w-0 mx-auto"></div>
+                              </div>
                             </div>
-                            {/* Drag handle */}
-                            <div
-                              className="absolute top-0 right-0 h-full w-5 cursor-col-resize z-10"
-                              onMouseDown={(e) => handleColumnResizeStart(e, index)}
-                            >
-                              <div className="h-full w-0 mx-auto"></div>
-                            </div>
-                          </div>
-                        </th>
-                      ))}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
@@ -1345,18 +1362,28 @@ export default function FileUploader() {
                         </td>
                         {row.map((cell, cellIndex) => {
                           const header = fileData.headers[cellIndex];
+                          // Determine if this cell is in a new column
+                          const isNewColumn = fileData.originalHeaders && !fileData.originalHeaders.includes(header);
+
                           // Improved cell value handling with better empty value display
                           let displayValue = '';
-                          let cellClassName = 'font-normal text-gray-900 whitespace-normal break-words';
+                          let cellClassName = `font-normal whitespace-normal break-words ${
+                            isNewColumn ? 'text-purple-900 bg-purple-50/50' : 'text-gray-900'
+                          }`;
+
                           if (cell === null || cell === undefined || cell === '') {
                             // Empty cell display
                             displayValue = '-';
-                            cellClassName = 'font-normal text-gray-400 italic whitespace-normal break-words';
+                            cellClassName = `font-normal italic whitespace-normal break-words ${
+                              isNewColumn ? 'text-purple-400 bg-purple-50/50' : 'text-gray-400'
+                            }`;
                           } else if (typeof cell === 'string') {
                             if (cell.trim() === '') {
                               // Empty string display
                               displayValue = '-';
-                              cellClassName = 'font-normal text-gray-400 italic whitespace-normal break-words';
+                              cellClassName = `font-normal italic whitespace-normal break-words ${
+                                isNewColumn ? 'text-purple-400 bg-purple-50/50' : 'text-gray-400'
+                              }`;
                             } else {
                               // Regular string display
                               displayValue = cell;
@@ -1377,7 +1404,9 @@ export default function FileUploader() {
                           return (
                             <td
                               key={cellIndex}
-                              className={`px-3 py-1.5 border border-gray-200 group relative hover:bg-blue-50 cursor-help`}
+                              className={`px-3 py-1.5 border border-gray-200 group relative hover:bg-blue-50 cursor-help ${
+                                isNewColumn ? 'border-l border-r border-purple-200' : ''
+                              }`}
                             >
                               <div className={cellClassName}>
                                 {(!isNaN(Number(displayValue)) && displayValue.length < 12) || displayValue === '-' ?
@@ -1398,6 +1427,9 @@ export default function FileUploader() {
                                 }}
                               >
                                 <div className="font-semibold text-blue-300 mb-1 border-b border-gray-600 pb-1">
+                                  {isNewColumn && (
+                                    <span className="mr-1 px-1.5 py-0.5 rounded bg-purple-700 text-white text-xs">AI Generated</span>
+                                  )}
                                   Row: {rowIndex + 1} | Column: {header}
                                 </div>
                                 <div className="pt-1">

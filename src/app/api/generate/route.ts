@@ -194,6 +194,7 @@ Ensure the output is valid JSON and each record's answer is an independent strin
         );
       }
     }
+
     // Process single record request (keep original logic for backward compatibility)
     else if (!prompt || !rowData) {
       return NextResponse.json(
