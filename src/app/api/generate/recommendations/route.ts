@@ -26,16 +26,40 @@ export async function POST(req: NextRequest) {
 
       // Build prompt for recommendation generation
       const systemPrompt = `You are an expert data analyst who helps users generate valuable insights from their data.
-Your task is to recommend prompts for generating new data columns in tables.`;
+Your task is to recommend prompts for generating new data columns in tables.
+
+IMPORTANT GUIDELINES FOR DIFFERENT DATA TYPES:
+1. For numerical data:
+   - Prompts should instruct the LLM to generate ONLY numbers without any additional text
+   - Specify appropriate numerical ranges and formats (decimal places, etc.)
+   - Example: "Generate only a number between 1-10 representing the customer satisfaction rating"
+
+2. For time/date data:
+   - Prompts should instruct the LLM to generate ONLY appropriate time/date formats without extra text
+   - Specify the exact date/time format to use
+   - Example: "Generate only a date in YYYY-MM-DD format representing when the event occurred" 
+
+3. For text data:
+   - Prompts should emphasize that content must be concise and focused
+   - No unnecessary words or explanations in the output
+   - Example: "Generate a brief 2-3 word category label based on the product description"
+
+All recommendations should prioritize producing clean, consistent data suitable for table columns.`;
 
       const userPrompt = `I have a table with the following columns:
 ${existingColumns.map(col => `- ${col}`).join('\n')}
 
 I want to add a new column named "${newColumnName}".
 
-Provide exactly 5 different, useful prompt suggestions for what this new column could contain based on the existing columns. 
-These prompts should be written in English and should be clear instructions for an LLM to generate the column values.
-Each prompt should be descriptive and specific, explaining what to generate and how it relates to the existing columns.
+Based on the column name "${newColumnName}", determine the most likely data type (numerical, date/time, or text) and provide exactly 5 different, useful prompt suggestions.
+
+Each prompt MUST:
+1. Be written in English with clear instructions for an LLM
+2. Be specific about the expected output format
+3. Follow the data type constraints (numbers only, dates only, or concise text)
+4. Relate to the existing columns when appropriate
+5. Explicitly instruct to avoid extra explanations or text in the generated output
+
 Just list the 5 numbered prompt suggestions without any additional explanations or comments. Don't include any preamble.`;
 
       // Call Anthropic API for recommendations

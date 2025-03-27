@@ -604,8 +604,8 @@ export default function FileUploader() {
         // Only call API for rows outside preview
         if (rowObjects.length > column.previewData.length) {
           const remainingRows = rowObjects.slice(column.previewData.length);
-          // [Optimization] Increase batch size to 20
-          const batchSize = 20; // Increase from 5 to 20
+          // [Optimization] Increase batch size to 100
+          const batchSize = 100; // Increase from 5 to 100
 
           for (let i = 0; i < remainingRows.length; i += batchSize) {
             const batch = remainingRows.slice(i, i + batchSize);
@@ -1285,6 +1285,24 @@ export default function FileUploader() {
                   </button>
                 </div>
 
+                {/* Add prompt guidance */}
+                <div className="mb-4 p-3 border border-blue-200 rounded-md bg-blue-50">
+                  <div className="text-sm text-blue-800 font-medium mb-2 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    </svg>
+                    Prompt Writing Tips
+                  </div>
+                  <div className="text-xs text-blue-700 space-y-1.5">
+                    <p>For clean table data, specify data type clearly in your prompts:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li><span className="font-medium">Numbers:</span> &ldquo;Generate only a number between 1-5 representing product rating&rdquo;</li>
+                      <li><span className="font-medium">Dates/Times:</span> &ldquo;Generate only a date in YYYY-MM-DD format for expected delivery&rdquo;</li>
+                      <li><span className="font-medium">Text:</span> &ldquo;Generate a concise 2-4 word product category based on the description&rdquo;</li>
+                    </ul>
+                  </div>
+                </div>
+
                 {/* List all column definitions */}
                 {newColumns.map((column, index) => (
                   <div key={column.id} className="mb-4 p-3 border border-gray-200 rounded-md bg-white">
@@ -1402,7 +1420,7 @@ export default function FileUploader() {
 
                       <textarea
                         className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#420039] focus:border-[#420039] min-h-[60px] text-gray-900 placeholder-gray-600"
-                        placeholder="Describe what you want the AI to generate based on other columns..."
+                        placeholder="Describe what you want the AI to generate based on other columns... (Specify output type: numbers only, date format, or concise text)"
                         value={column.prompt}
                         onChange={(e) => updateColumnProperty(column.id, 'prompt', e.target.value)}
                       />
