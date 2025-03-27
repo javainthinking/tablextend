@@ -1007,7 +1007,7 @@ export default function FileUploader() {
           <div className="p-4 mb-6 text-sm bg-amber-100 text-amber-800 rounded-lg">
             <div className="flex items-center">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-amber-600" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
               </svg>
               <span className="font-medium">Warning:</span>
               <span className="ml-1">Do not close or refresh this page while processing! Your task will be terminated and all progress will be lost.</span>
@@ -1173,7 +1173,6 @@ export default function FileUploader() {
                     {/* Preview data (only display columns with preview data) */}
                     {column.previewData.length > 0 && (
                       <div className="mt-2">
-                        <div className="text-xs font-medium text-gray-700 mb-1">Preview Data:</div>
                         <div className="border border-gray-200 rounded p-2 bg-white w-full">
                           {column.previewData.map((content, idx) => (
                             <div
@@ -1184,29 +1183,6 @@ export default function FileUploader() {
                               <span className="text-gray-900 inline-block truncate max-w-full" style={{ maxWidth: "calc(100% - 60px)" }}>
                                 {content}
                               </span>
-                              {/* Improved tooltip for file preview cells */}
-                              <div className="absolute z-50 invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-800 text-white text-xs rounded-md p-2 shadow-lg whitespace-pre-wrap break-words transition-all duration-200 ease-in-out overflow-auto max-h-[200px] max-w-[300px]"
-                                style={{
-                                  left: '0',
-                                  right: '0',
-                                  margin: '0 auto',
-                                  top: 'auto',
-                                  bottom: 'auto',
-                                  transform: 'translateY(-100%)',
-                                  marginTop: '-8px'
-                                }}
-                              >
-                                <div className="font-semibold text-blue-300 mb-1 border-b border-gray-600 pb-1">
-                                  Row: {idx + 1} | Column: {fileData.headers[idx]}
-                                </div>
-                                <div className="pt-1">
-                                  {content !== null && content !== undefined && String(content).trim() !== ''
-                                    ? String(content)
-                                    : <span className="italic text-gray-400">Empty cell</span>
-                                  }
-                                </div>
-                                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1/2 rotate-45 w-2 h-2 bg-gray-800"></div>
-                              </div>
                             </div>
                           ))}
                         </div>
@@ -1314,18 +1290,19 @@ export default function FileUploader() {
                         return (
                           <th
                             key={index}
-                            className={`px-3 py-1.5 font-semibold text-gray-700 border border-gray-200 relative bg-gray-100 ${isNewColumn ? 'bg-gradient-to-b from-purple-50 to-gray-100 border-t-2 border-t-purple-400' : ''}`}
+                            className={`px-3 py-1.5 font-semibold border border-gray-200 relative bg-gray-100 ${isNewColumn ? 'from-purple-100 to-purple-50 border-t-2 border-t-purple-400 border-b-0 shadow-sm' : 'text-gray-700'}`}
                             style={{
                               minWidth: "100px",
-                              width: columnWidths[index] ? `${columnWidths[index]}px` : undefined
+                              width: columnWidths[index] ? `${columnWidths[index]}px` : undefined,
+                              ...(isNewColumn ? { background: 'linear-gradient(to bottom, #f3e8ff, #faf5ff)' } : {})
                             }}
                           >
                             <div className="flex items-center justify-between">
                               <div className="flex items-center">
                                 {isNewColumn && (
-                                  <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-purple-500"></span>
+                                  <span className="mr-1.5 flex items-center justify-center h-4 w-4 rounded-full bg-purple-500 text-white text-[8px] font-bold">AI</span>
                                 )}
-                                <span className={`${header.startsWith('Column_') ? 'italic text-gray-500' : ''} ${isNewColumn ? 'text-purple-700 font-medium' : ''}`}>
+                                <span className={`${header.startsWith('Column_') ? 'italic text-gray-500' : ''} ${isNewColumn ? 'text-purple-800 font-semibold' : 'text-gray-700'}`}>
                                   {intelligentTruncate(header, 20)}
                                 </span>
                                 <span className="ml-1 text-gray-400">
@@ -1404,9 +1381,8 @@ export default function FileUploader() {
                           return (
                             <td
                               key={cellIndex}
-                              className={`px-3 py-1.5 border border-gray-200 group relative hover:bg-blue-50 cursor-help ${
-                                isNewColumn ? 'border-l border-r border-purple-200' : ''
-                              }`}
+                              className={`px-3 py-1.5 border border-gray-200 group relative hover:bg-blue-50 cursor-help ${isNewColumn ? 'border-l border-r border-purple-200' : ''}`}
+                              style={isNewColumn ? { background: 'rgba(243, 232, 255, 0.2)' } : {}}
                             >
                               <div className={cellClassName}>
                                 {(!isNaN(Number(displayValue)) && displayValue.length < 12) || displayValue === '-' ?
