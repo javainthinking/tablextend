@@ -541,7 +541,7 @@ export default function FileUploader() {
       );
       return;
     }
-    
+
     if (!fileData || !newColumns.length || isProcessing) {
       return;
     }
@@ -981,7 +981,7 @@ export default function FileUploader() {
   // Handle tooltip toggle for preview data
   const togglePreviewTooltip = (columnId: string, rowIndex: number, event: React.MouseEvent) => {
     event.stopPropagation();
-    
+
     if (activeTooltip && activeTooltip.type === 'preview' && activeTooltip.columnId === columnId && activeTooltip.rowIndex === rowIndex) {
       // If clicking the same cell, close the tooltip
       setActiveTooltip(null);
@@ -999,7 +999,7 @@ export default function FileUploader() {
   // Handle tooltip toggle for file preview cells
   const toggleCellTooltip = (rowIndex: number, columnIndex: number, event: React.MouseEvent) => {
     event.stopPropagation();
-    
+
     if (activeTooltip && activeTooltip.type === 'filecell' && activeTooltip.rowIndex === rowIndex && activeTooltip.columnIndex === columnIndex) {
       // If clicking the same cell, close the tooltip
       setActiveTooltip(null);
