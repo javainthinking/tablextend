@@ -25,6 +25,7 @@ type ColumnInfo = {
   isProcessing: boolean;
   previewData: string[];
   isPreviewApproved: boolean;
+  promptRecommendations?: string[];
 };
 
 // Add an interface to define API response type
@@ -49,9 +50,11 @@ export default function FileUploader() {
       isProcessing: false,
       previewData: [],
       isPreviewApproved: false,
+      promptRecommendations: [],
     }
   ]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<ReactNode | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -228,11 +231,11 @@ export default function FileUploader() {
     setSuccess(null);
     setFileData(null);
 
-    // Check file size - prevent files larger than 5MB
-    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
+    // Check file size - prevent files larger than 2MB
+    const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB in bytes
     if (file.size > MAX_FILE_SIZE) {
-      setError(<>File size ({(file.size / (1024 * 1024)).toFixed(2)}MB) exceeds the maximum limit of 5MB. Please use&nbsp;<a href="https://powerdrill.ai" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">powerdrill.ai</a>&nbsp;for larger files.</>);
-      toast.error(`文件大小超过5MB限制`);
+      setError(<>File size ({(file.size / (1024 * 1024)).toFixed(2)}MB) exceeds the maximum limit of 2MB. Please use&nbsp;<a href="https://powerdrill.ai" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">powerdrill.ai</a>&nbsp;for larger files.</>);
+      toast.error(`File size exceeds 2MB limit`);
       return;
     }
 
@@ -244,7 +247,7 @@ export default function FileUploader() {
     } else if (['xlsx', 'xls'].includes(fileExtension || '')) {
       handleExcelFile(file);
     } else {
-      setError('不支持的文件格式。请上传CSV或Excel文件。');
+      setError('Unsupported file format. Please upload a CSV or Excel file.');
     }
   };
 
@@ -271,7 +274,7 @@ export default function FileUploader() {
       header: false,
       skipEmptyLines: true,
       error: (error) => {
-        setError(`无法解析CSV文件：${error.message}`);
+        setError(`Unable to parse CSV file: ${error.message}`);
       },
     });
   };
@@ -324,12 +327,12 @@ export default function FileUploader() {
           });
         }
       } catch (error) {
-        setError(`解析Excel文件错误: ${error instanceof Error ? error.message : String(error)}`);
+        setError(`Excel file parsing error: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
 
     reader.onerror = () => {
-      setError('读取文件时出错。请重试。');
+      setError('Error reading file. Please try again.');
     };
 
     reader.readAsArrayBuffer(file);
@@ -341,7 +344,7 @@ export default function FileUploader() {
     try {
       // Use the stored raw data instead of reading the file again
       if (!fileData.rawData) {
-        setError('文件数据不可用。请重新上传文件。');
+        setError('File data unavailable. Please upload the file again.');
         return;
       }
 
@@ -366,20 +369,20 @@ export default function FileUploader() {
 
           setSuccess(`Sheet "${sheetName}" selected successfully!`);
         } else {
-          setError(`选择的表格"${sheetName}"为空或无效。`);
+          setError(`Selected sheet "${sheetName}" is empty or invalid.`);
         }
       } catch (error) {
-        setError(`解析表格"${sheetName}"错误: ${error instanceof Error ? error.message : String(error)}`);
+        setError(`Error parsing sheet "${sheetName}": ${error instanceof Error ? error.message : String(error)}`);
       }
     } catch (error) {
-      setError(`选择表格错误: ${error instanceof Error ? error.message : String(error)}`);
+      setError(`Sheet selection error: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
   // Updated function, supporting multi-column or single-column preview generation - batch processing version
   const generatePreviewData = async (columnId?: string) => {
     if (!fileData) {
-      setError('请先上传文件。');
+      setError('Please upload a file first.');
       return;
     }
 
@@ -389,7 +392,7 @@ export default function FileUploader() {
       : newColumns.filter(col => col.name && col.prompt);
 
     if (columnsToProcess.length === 0) {
-      setError('请在生成预览前提供列名和提示。');
+      setError('Please provide column name and prompt before generating preview.');
       return;
     }
 
@@ -437,9 +440,9 @@ export default function FileUploader() {
 
               if (!result.ok) {
                 if (result.status === 504) {
-                  throw new Error('网关超时 (504): 服务器响应时间过长');
+                  throw new Error('Gateway Timeout (504): Server response took too long');
                 }
-                throw new Error(`API错误: ${result.status} ${result.statusText}`);
+                throw new Error(`API Error: ${result.status} ${result.statusText}`);
               }
 
               return await result.json();
@@ -456,7 +459,7 @@ export default function FileUploader() {
             // Parse the batch results
             const previewData = Array.isArray(response.batchResults)
               ? response.batchResults
-              : Array(5).fill('错误: 无法生成预览数据');
+              : Array(5).fill('Error: Unable to generate preview data');
 
             return {
               id: column.id,
@@ -475,8 +478,8 @@ export default function FileUploader() {
 
             // Create a user-friendly error message
             const userErrorMessage = isTimeout
-              ? '服务器超时。多次重试后仍未能生成内容。'
-              : `生成内容错误: ${errorMessage}`;
+              ? 'Server timeout. Failed to generate content after multiple retries.'
+              : `Content generation error: ${errorMessage}`;
 
             return {
               id: column.id,
@@ -641,9 +644,9 @@ export default function FileUploader() {
 
                 if (!result.ok) {
                   if (result.status === 504) {
-                    throw new Error('网关超时 (504): 服务器响应时间过长');
+                    throw new Error('Gateway Timeout (504): Server response took too long');
                   }
-                  throw new Error(`API错误: ${result.status} ${result.statusText}`);
+                  throw new Error(`API Error: ${result.status} ${result.statusText}`);
                 }
 
                 return await result.json();
@@ -662,14 +665,14 @@ export default function FileUploader() {
                 fullGeneratedData.push(...response.batchResults);
               } else if (Array.isArray(response.batchResults)) {
                 // If we have results but count doesn't match, fill in the missing ones
-                console.warn(`批处理结果长度不匹配: 预期 ${batch.length}, 实际获得 ${response.batchResults.length}`);
+                console.warn(`Batch processing result length mismatch: Expected ${batch.length}, received ${response.batchResults.length}`);
                 const validResults = response.batchResults;
-                const fillerResults = Array(batch.length - validResults.length).fill('错误: 不完整的批处理结果');
+                const fillerResults = Array(batch.length - validResults.length).fill('Error: Incomplete batch results');
                 fullGeneratedData.push(...validResults, ...fillerResults);
               } else {
                 // If return is not an array or is invalid, add error information
-                console.error('无效的批处理结果:', response);
-                fullGeneratedData.push(...Array(batch.length).fill('错误: 无法生成批处理内容'));
+                console.error('Invalid batch results:', response);
+                fullGeneratedData.push(...Array(batch.length).fill('Error: Unable to generate batch content'));
               }
 
               // Update progress information
@@ -688,8 +691,8 @@ export default function FileUploader() {
 
               // Create user-friendly error message based on error type
               const userErrorMessage = isTimeout
-                ? '服务器超时。多次重试后仍未能生成内容。'
-                : `生成内容错误: ${errorMessage}`;
+                ? 'Server timeout. Failed to generate content after multiple retries.'
+                : `Content generation error: ${errorMessage}`;
 
               // Show a toast with the error but continue processing
               toast.error(`Error in batch: ${userErrorMessage}. Continuing with remaining data.`);
@@ -739,6 +742,7 @@ export default function FileUploader() {
         isProcessing: false,
         previewData: [],
         isPreviewApproved: false,
+        promptRecommendations: [],
       }]);
 
       // Calculate output filename to display in success message
@@ -905,6 +909,7 @@ export default function FileUploader() {
         isProcessing: false,
         previewData: [],
         isPreviewApproved: false,
+        promptRecommendations: [],
       }
     ]);
   };
@@ -939,6 +944,7 @@ export default function FileUploader() {
       isProcessing: false,
       previewData: [],
       isPreviewApproved: false,
+      promptRecommendations: [],
     }]);
     setError(null);
     setSuccess(null);
@@ -1011,6 +1017,100 @@ export default function FileUploader() {
         columnIndex
       });
     }
+  };
+
+  // Add a function to fetch prompt recommendations
+  const fetchPromptRecommendations = async (columnId: string, columnName: string) => {
+    if (!fileData || !columnName.trim() || !fileData.headers.length) {
+      return;
+    }
+
+    // Set loading state for this specific column
+    setIsLoadingRecommendations(prev => ({ ...prev, [columnId]: true }));
+
+    try {
+      const response = await rateControlledApiCallWithRetry<{
+        success: boolean;
+        recommendations: string[];
+        error?: string;
+      }>(async () => {
+        const result = await fetch('/api/generate/recommendations', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            existingColumns: fileData.headers,
+            newColumnName: columnName,
+            model: 'claude-3-haiku-20240307',
+          }),
+        });
+
+        if (!result.ok) {
+          throw new Error(`API Error: ${result.status} ${result.statusText}`);
+        }
+
+        return await result.json();
+      });
+
+      if (response.success && response.recommendations.length > 0) {
+        // Update the column with recommendations
+        setNewColumns(columns => columns.map(col =>
+          col.id === columnId
+            ? { ...col, promptRecommendations: response.recommendations }
+            : col
+        ));
+      }
+    } catch (error) {
+      console.error('Error fetching prompt recommendations:', error);
+      toast.error(`Failed to fetch recommendations: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      // Clear loading state
+      setIsLoadingRecommendations(prev => {
+        const updated = { ...prev };
+        delete updated[columnId];
+        return updated;
+      });
+    }
+  };
+
+  // Debounced function to fetch recommendations after a delay
+  const debouncedFetchRecommendations = useRef<Record<string, NodeJS.Timeout>>({});
+
+  const handleColumnNameChange = (columnId: string, name: string) => {
+    // Update the column name immediately
+    updateColumnProperty(columnId, 'name', name);
+
+    // Clear any existing timeout for this column
+    if (debouncedFetchRecommendations.current[columnId]) {
+      clearTimeout(debouncedFetchRecommendations.current[columnId]);
+    }
+
+    // If name is empty, don't fetch recommendations
+    if (!name.trim()) {
+      return;
+    }
+
+    // Set a timeout to fetch recommendations after 1500ms of inactivity
+    debouncedFetchRecommendations.current[columnId] = setTimeout(() => {
+      fetchPromptRecommendations(columnId, name);
+    }, 1500);
+  };
+
+  // Function to select a recommendation and set it as the prompt
+  const selectRecommendation = (columnId: string, recommendation: string) => {
+    // Update the prompt with the selected recommendation
+    updateColumnProperty(columnId, 'prompt', recommendation);
+
+    // Clear recommendations and preview data after selection
+    setNewColumns(columns => columns.map(col =>
+      col.id === columnId
+        ? { ...col, promptRecommendations: [], previewData: [] }
+        : col
+    ));
+
+    // Show toast notification that prompt was selected and preview needs to be regenerated
+    toast.success('Prompt selected. Generate preview to see results.', { duration: 3000 });
   };
 
   return (
@@ -1213,7 +1313,7 @@ export default function FileUploader() {
                           placeholder="Enter name"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#420039] focus:border-[#420039] text-gray-900"
                           value={column.name}
-                          onChange={(e) => updateColumnProperty(column.id, 'name', e.target.value)}
+                          onChange={(e) => handleColumnNameChange(column.id, e.target.value)}
                         />
                       </div>
                       <div>
@@ -1258,6 +1358,48 @@ export default function FileUploader() {
                     </div>
 
                     <div className="relative">
+                      {/* Recommendations display - show right after input, before textarea */}
+                      {column.promptRecommendations && column.promptRecommendations.length > 0 && (
+                        <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-md shadow-sm">
+                          <div className="text-sm text-blue-800 font-medium mb-2">
+                            Recommended prompts:
+                            {isLoadingRecommendations[column.id] && (
+                              <span className="ml-2 inline-flex items-center">
+                                <svg className="w-3 h-3 mr-1 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Loading...
+                              </span>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            {column.promptRecommendations.map((recommendation, idx) => (
+                              <div
+                                key={idx}
+                                className="text-sm p-2.5 bg-white border border-blue-200 rounded-md cursor-pointer hover:bg-blue-100 transition-colors shadow-sm hover:shadow"
+                                onClick={() => selectRecommendation(column.id, recommendation)}
+                              >
+                                <span className="font-medium text-blue-800 mr-1">{idx + 1}.</span> <span className="text-gray-900 font-medium">{recommendation}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Show loading indicator when fetching recommendations but none available yet */}
+                      {isLoadingRecommendations[column.id] && (!column.promptRecommendations || column.promptRecommendations.length === 0) && (
+                        <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-md shadow-sm">
+                          <div className="text-sm text-blue-800 font-medium flex items-center">
+                            <svg className="w-4 h-4 mr-2 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Generating prompt recommendations...
+                          </div>
+                        </div>
+                      )}
+
                       <textarea
                         className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#420039] focus:border-[#420039] min-h-[60px] text-gray-900 placeholder-gray-600"
                         placeholder="Describe what you want the AI to generate based on other columns..."
@@ -1274,17 +1416,17 @@ export default function FileUploader() {
                             <div key={idx} className={`text-xs py-1 px-2 ${idx % 2 === 0 ? 'bg-gray-50' : 'bg-white'} relative`}>
                               <div className="flex items-center w-full tooltip-trigger cursor-pointer" onClick={(e) => togglePreviewTooltip(column.id, idx, e)}>
                                 <span className="font-medium text-gray-700 mr-1 flex-shrink-0 w-14">Row {idx + 1}:</span>
-                                <span className={`inline-block text-left w-full overflow-hidden overflow-ellipsis whitespace-nowrap ${content.includes('生成失败') || content.includes('服务器超时') || content.includes('错误') ? 'text-red-500 font-medium' : 'text-gray-900'}`}>
+                                <span className={`inline-block text-left w-full overflow-hidden overflow-ellipsis whitespace-nowrap ${content.includes('Generation failed') || content.includes('Server timeout') || content.includes('Error') ? 'text-red-500 font-medium' : 'text-gray-900'}`}>
                                   {content}
                                 </span>
-                                {content.includes('生成失败') && (
+                                {content.includes('Generation failed') && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       generatePreviewData(column.id);
                                     }}
                                     className="ml-2 p-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-md flex-shrink-0"
-                                    title="重试生成此行"
+                                    title="Retry generating this row"
                                   >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -1300,16 +1442,16 @@ export default function FileUploader() {
                                 </div>
                                 <div className="pt-1">
                                   {content !== null && content !== undefined && String(content).trim() !== '' ? (
-                                    content.includes('生成失败') ? (
+                                    content.includes('Generation failed') ? (
                                       <div>
-                                        <span className="text-red-400 font-medium">生成失败可能因为:</span>
+                                        <span className="text-red-400 font-medium">Generation failed possibly due to:</span>
                                         <ul className="list-disc pl-4 mt-1 text-red-300">
-                                          <li>服务器临时响应超时</li>
-                                          <li>AI模型无法理解指令</li>
-                                          <li>数据格式或内容复杂</li>
+                                          <li>Temporary server timeout</li>
+                                          <li>AI model could not understand the instructions</li>
+                                          <li>Complex data format or content</li>
                                         </ul>
                                         <div className="mt-2 text-blue-300">
-                                          建议: 尝试点击重试按钮，或修改提示使其更具体
+                                          Suggestion: Try clicking the retry button or make your prompt more specific
                                         </div>
                                       </div>
                                     ) : (
